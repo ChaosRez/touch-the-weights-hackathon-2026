@@ -110,11 +110,72 @@ Taken from the fork's own MCP tool-calling example,
 - **v1 env block shape** `env.taskset = { id = "alien-api" }`. The flat `id = "..."` form
   is the v0/legacy bridge and fails for this env.
 
-## Job 119 — in progress
+## Job 119 — CANCELLED after every rollout failed. Two real results.
 
-Purpose: run the committed `rl.toml` unmodified (Qwen3-8B + LoRA, `tp=1/dp=2`) with
-`--max-steps 2` passed on the command line, to test in order: whether `[inference.parallel]`
-avoids 118's weight-sync timeout, whether the `null` harness clears MCP
-`session.initialize()`, and whether real tool calls appear.
+Committed `rl.toml` unmodified (Qwen3-8B + LoRA), `--max-steps 2`.
+
+**Result 1: the weight-sync stall that killed 118 is gone, but not for the reason I
+guessed.** I expected `[inference.parallel] tp=1/dp=2` to be the fix. The log says
+otherwise:
+
+```
+118:  Initializing weight broadcast (type='nccl')  ... NCCL broadcast: 1 servers,
+      inference_world_size=1, gpus_per_server=1     -> hung, ReadTimeout after 11 min
+119:  Initializing weight broadcast (type='filesystem')  -> proceeded in seconds
+```
+
+The LoRA path selects **filesystem** broadcast, and filesystem does not hang. So the
+lesson is "LoRA/filesystem broadcast works, the NCCL path in this image hangs on a 2-GPU
+inference pool", not anything about `tp`/`dp`. **A full fine-tune run that selects NCCL
+should be expected to hit 118's stall again** — unverified, but do not assume the
+committed config protects you if you drop LoRA.
+
+**Result 2: the harness change took effect and did NOT fix the MCP blocker.**
+
+```
+21:44:31 Starting orchestrator loop (max_steps=2)
+21:44:41 Train batch 0/128 (0.0%); 128 inflight rollouts (train=128, eval=0)
+21:45:05 Rollout failed ... HarnessError: harness 'null' exited 1
+           File "/tmp/vf-scripts/<hash>.py", line 86, in list_tools
+             async with mcp_session(spec) as session:
+             await session.initialize()
+           asyncio.exceptions.CancelledError: Cancelled via cancel scope
+```
+
+It says **`harness 'null'`**, so `env.agent.harness` is being applied — that config is
+correct and confirmed. The MCP `session.initialize()` failure is **independent of harness
+choice**, so the previously documented "bash harness" framing was a red herring: the
+harness was wrong *and* MCP was broken, and fixing the first did not fix the second.
+
+### What has been ruled out for the MCP failure
+
+- **Missing MCP entrypoints.** All three toolset modules bind and report a port locally in
+  ~1s (`crm` 1.2s, `wiki` 0.9s, `answer` 0.9s). Note the repo's `test_mcp_launch.py` only
+  covers `crm` and `wiki`; `answer` was probed manually and is fine. Worth adding to the
+  test.
+- **A read timeout.** The harness uses `MCP_TIMEOUT = httpx.Timeout(600.0, connect=5.0)`.
+  Six hundred seconds of read budget, and the failure came ~34s in as a
+  `CancelledError` from an outer cancel scope. So the server accepted the connection and
+  never answered `initialize`, and something upstream gave up on it.
+- **A stdio/env mismatch.** The harness connects over **streamable HTTP** to `spec["url"]`
+  (`verifiers/v1/harnesses/null/program.py`), so the servers are launched by the env
+  server inside `/app/.venv`, where `alien_api_env` is installed. The harness's isolated
+  uv environment never needs to import the env package.
+
+### Leading hypothesis: thundering herd
+
+`Train batch 0/128; 128 inflight rollouts` — the orchestrator launched **128 rollouts
+simultaneously** on one pod, each spawning a harness subprocess and its own MCP sessions
+against three servers. That is the next thing to eliminate.
+
+## Job 120 — in progress
+
+`smoke-rl.toml` + `smoke.yaml`: identical to `rl.toml` except every concurrency knob is at
+the floor (`batch_size 4`, `group_size 2`, `max_inflight_rollouts 4`,
+`pool.num_workers 2`, `max_completion_tokens 1024`, `max_steps 2`).
+
+Single variable under test: **is the MCP failure load-induced or absolute?** If this passes
+and `rl.toml` does not, the fix is concurrency limits. If this fails identically, MCP is
+broken at any scale and the environment or the image needs the fix.
 
 Result: pending.

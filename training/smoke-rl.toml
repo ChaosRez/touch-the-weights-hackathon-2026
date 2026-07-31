@@ -1,0 +1,127 @@
+# SMOKE config — minimum concurrency, 2 steps. NOT a training recipe.
+#
+# Identical to rl.toml except that everything driving concurrency is turned down to the
+# floor. Purpose: isolate whether the MCP `session.initialize()` failure is a thundering
+# herd (128 inflight rollouts, each spawning a harness subprocess and its own MCP
+# sessions, on one pod) or something that fails even with a single rollout at a time.
+#
+# Run this BEFORE rl.toml on any new image or cluster. If this passes and rl.toml does
+# not, the problem is concurrency and the fix is max_inflight_rollouts / pool.num_workers,
+# not the environment.
+# all-in-one `rl` launcher. LoRA on Qwen3-8B so the whole thing fits in the 4-GPU cap.
+#
+# The [[orchestrator.train.env]] block is the v1 shape (schema-verified against verifiers
+# 0.2.2.dev36: the id resolves to AlienApiTaskset, every .taskset knob is a real field).
+# Do the smoke in README.md (2 steps) before any long run.
+
+output_dir = "/scratch/alien-api/run"     # writable emptyDir from run.yaml, NOT /mnt/nvme
+max_steps = 2
+seq_len = 32768
+
+# GPU split for the single node. 2 train + 2 infer = the 4-GPU team cap. `rl` places the
+# trainer on the first N and the vLLM inference replicas on the rest.
+[deployment]
+type = "single_node"
+gpus_per_node = 4
+num_train_gpus = 2
+num_infer_gpus = 2
+
+[model]
+name = "Qwen/Qwen3-8B"
+
+[orchestrator]
+batch_size = 4            # SMOKE ONLY. See the note at the top of this file.
+group_size = 2            # SMOKE ONLY: 4/2 = 2 prompts per step. Useless for learning, fast to fail.
+max_inflight_rollouts = 4
+max_off_policy_steps = 0
+num_train_workers = 2
+collect_inference_metrics = true
+
+[orchestrator.optim]
+lr = 1e-05
+
+[orchestrator.model]
+name = "Qwen/Qwen3-8B"
+
+# LoRA keeps the trainer light enough for 2 GPUs. Full fine-tune of 8B does not fit the split.
+[orchestrator.model.lora]
+name = "alien-api-lora"
+rank = 32
+alpha = 64.0
+
+[orchestrator.train.sampling]
+temperature = 1.0
+max_completion_tokens = 1024
+
+# --- the environment (v1 shape) ------------------------------------------------------
+[[orchestrator.train.env]]
+name = "alien-api"
+
+[orchestrator.train.env.env.taskset]
+id = "alien-api"
+split = ""                # "" = all 240 episodes, one sequential pass (the CL setup)
+artifact_verbosity = 22000   # tool returns pad toward this; lower it to make exploration cheaper
+
+[orchestrator.train.env.env.agent]
+max_turns = 20
+# SET THE HARNESS EXPLICITLY. Without this line the harness is resolved by
+# `default_harness_id("alien-api")`, which falls back to **"bash"** because the taskset
+# exports no Harness subclass. The bash harness is a code-executing coding agent
+# (EXECUTES_CODE=True) and is the wrong driver for a plain MCP tool-calling taskset —
+# it is also the harness named in the `HarnessError: harness 'bash' exited 1` failure.
+# `null` is the plain tool-calling harness (SUPPORTS_MCP=True, EXECUTES_CODE=False), and
+# it is what the fork's own MCP tool-calling example uses
+# (configs/basic/wiki-search/rl.toml).
+harness = { id = "null", runtime = { type = "subprocess" } }
+
+[orchestrator.train.env.pool]
+type = "static"
+num_workers = 2           # SMOKE ONLY: minimum concurrency, to isolate the MCP failure
+
+# no [eval] block on purpose: single sequential pass, watch the windowed trend in W&B.
+
+[trainer]
+
+# The TRAINER's LoRA config carries target_modules (the orchestrator block above takes only
+# name/rank/alpha). ATTENTION-ONLY on purpose: prime-rl's default targets all linear layers
+# (attention + MLP), which makes the adapter large and makes vLLM's load_lora_adapter return
+# 500 at rollout start. Keep it to the four attention projections. (NO `name` here — trainer
+# LoRA rejects it; the name lives in [orchestrator.model.lora].)
+[trainer.model.lora]
+rank = 32
+alpha = 64.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+
+[trainer.optim]
+lr = 1e-05
+
+[inference]
+
+# REQUIRED for tool calling on Qwen under vLLM. Without a parser, vLLM returns the model's
+# tool calls as ordinary assistant text: the harness sees no tool calls, the agent never
+# reads the world, and every rollout scores 0 with tool_calls=0 — which looks like "the
+# model is bad at the task" rather than a config error. The fork's own MCP tool-calling
+# example (configs/basic/wiki-search/rl.toml, Qwen3-4B) sets exactly this.
+[inference.model]
+tool_call_parser = "hermes"
+
+# 2 inference GPUs as two independent 8B replicas (tp=1, dp=2). 8B fits on one H100.
+[inference.parallel]
+tp = 1
+dp = 2
+
+[ckpt]
+interval = 10
+keep_last = 4
+
+# W&B: the `rl` entrypoint uses shared mode, so top-level `[wandb] offline=true` is REJECTED.
+# Default here is OFFLINE per-process (no key needed; data lands under output_dir/.../wandb).
+# To go ONLINE and watch curves live: set both offline=false below AND export WANDB_API_KEY
+# (and set WANDB_MODE=online / remove it from run.yaml).
+[orchestrator.wandb]
+project = "alien-api-hackathon"
+offline = true
+
+[trainer.wandb]
+project = "alien-api-hackathon"
+offline = true
