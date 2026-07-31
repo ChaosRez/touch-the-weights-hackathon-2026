@@ -6,136 +6,124 @@ description: Run GPU workloads on the Construct Labs cluster via SkyPilot. Use w
 # Cluster access
 
 SkyPilot is the only entrypoint. No kubeconfig, no kubectl, no node SSH. One endpoint, one
-identity per person or agent, everything visible in one dashboard.
+identity per person or agent, everything visible in one dashboard. You run in an isolated
+`hackathon` workspace: you can see and manage only your own jobs, never anyone else's.
 
 > Event-specific values your organizers give you:
-> `SKYPILOT_API_SERVER_ENDPOINT`, your team's queue name, and the training image digest.
-> Fill them in below before running anything.
-
-## Two hard rules
-
-The GPUs are shared across every team for the whole event. Both of these are about not
-taking capacity away from the room.
-
-**1. Submit jobs. Do not create clusters.**
-
-Use `sky jobs launch`. Do not use `sky launch -c <name>`.
-
-`sky launch -c <name>` creates a **persistent cluster** that holds its GPUs from the moment
-it starts until someone runs `sky down`. It keeps holding them while you read logs, while
-you think, while you are at lunch, and overnight. A managed job with `sky jobs launch`
-takes GPUs when it runs and gives them back when it finishes.
-
-One idle dev cluster can park 8 H100s for a day. There are not enough GPUs for that to
-happen more than once.
-
-**2. Single node only. No multi-node runs.**
-
-Every task file stays at one node. Do not set `num_nodes`, do not launch anything that
-spans hosts.
-
-Multi-node jobs are admitted all-or-nothing, so they sit holding nothing until an entire
-second node frees up, and then take both at once. During an event with many small jobs
-that means one team blocks the queue for everyone while getting nothing done itself. The
-training config that ships with this repo is single node, 8x H100, on purpose.
-
-If you genuinely believe you need more than one node, talk to an organizer first.
+> `SKYPILOT_API_SERVER_ENDPOINT` (with your `user:password`), the Tailscale login, and the
+> **training image digest**. Fill them in before running anything.
 
 ## Setup, once
 
-1. Install Tailscale and join the tailnet with the account the organizers tell you to use.
+1. Install Tailscale and join the tailnet with the account/key the organizers give you.
    Verify: `tailscale status` lists the cluster head, and the dashboard URL loads in a
-   browser. A login prompt means success. If neither works you are on the wrong tailnet,
-   which is the single most common setup failure.
-2. `pip install "skypilot[kubernetes]"`
-3. `export SKYPILOT_API_SERVER_ENDPOINT=https://<user>:<pass>@<head>.ts.net`
-4. Verify: `sky api info` shows the server, `sky gpus list` shows H100s.
+   browser (a login prompt = success). If neither works you are on the wrong tailnet — the
+   single most common setup failure.
+2. `pip install "skypilot[kubernetes]"` (or `uv pip install "skypilot[kubernetes]"`).
+3. `export SKYPILOT_API_SERVER_ENDPOINT="https://<user>:<password>@<head>.ts.net"`
+4. Verify: `sky api info` shows the server and your user; `sky gpus list` shows H100s.
+   `sky status` should show **no clusters** — if it lists one, you are holding GPUs.
 
-Agents use a service-account token in the same variable, owned by a human.
+## Two hard rules
 
-## Recipes
+The GPUs are shared across every team. Both rules are about not taking capacity from the room.
 
-**Everything is a managed job.** One shape, single node:
+**1. Submit jobs. Do not create clusters.** Use `sky jobs launch`, not `sky launch -c <name>`.
+A named cluster holds its GPUs from the moment it starts until someone runs `sky down` —
+while you read logs, think, or sleep. A managed job (`sky jobs launch`) gives them back when
+it finishes.
+
+**2. Single node only.** One node per task. Do not set `num_nodes`. Multi-node jobs are
+admitted all-or-nothing and block the queue waiting for a whole second node.
+
+## Your quota
+
+- **4 GPUs, hard cap.** A job asking for more than `H100-80GB:4` is rejected by the namespace
+  quota and sits **Pending forever** — it is not a queue wait, it will never start. Ask for
+  what you need, up to 4.
+- **Low priority, preemptible.** Your jobs run on spare capacity and are preempted when the
+  hosts' owners reclaim it. For anything longer than a smoke, wire checkpoint/resume (see
+  "Long runs"). You never preempt anyone else.
+
+## The task shape (this matters — copy it)
+
+Every guest task needs the same three things in `config.kubernetes.pod_config`, and jobs fail
+without them. This is the minimal working shape:
 
 ```yaml
-# task.yaml
 name: myjob
 resources:
   infra: kubernetes
-  accelerators: H100-80GB:1     # ask for what you need, not the whole node
+  accelerators: H100-80GB:1          # <= 4
+  # The prepared hackathon image (PUBLIC, anonymous pull — no credential). Digest-pinned;
+  # your organizers give you the current digest. It already contains prime-rl.
+  image_id: docker:<registry>/ml-hackathon/prime-rl-base@sha256:<digest>
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          - securityContext:
+              runAsUser: 0             # REQUIRED. The image runs as a non-root user; SkyPilot
+                                       # bootstraps ssh/ray as root. Omit this and your job dies
+                                       # in setup with "sudo: no new privileges is set".
+            volumeMounts:
+              - {name: scratch, mountPath: /scratch}   # your writable workspace (caches, ckpts)
+        volumes:
+          - {name: scratch, emptyDir: {sizeLimit: 200Gi}}   # emptyDir, NOT hostPath
 run: |
   python my_script.py
 ```
 
 ```bash
 sky jobs launch -y -n myjob task.yaml
-sky jobs queue                   # your jobs and their state
-sky jobs logs myjob              # or --no-follow for a snapshot
+sky jobs queue                     # your jobs and their state
+sky jobs logs myjob                # or --no-follow for a snapshot
 sky jobs cancel myjob
 ```
 
-**Iterating on code.** The instinct is to grab an interactive box. Do not. Put your
-debugging in the `run:` block and resubmit: a job that starts, prints, and exits takes
-seconds of GPU time instead of parking a node while you edit. `workdir:` syncs your local
-directory each launch, so the edit-resubmit loop is fast.
+## Non-negotiables (each of these is a job that fails without it)
 
-```yaml
-workdir: .
-run: |
-  python -c "import torch; print(torch.cuda.device_count())"
-```
-
-**Short probes are cheap and encouraged.** Verifying an import, a checkpoint path, or a
-config takes a one-CPU or one-GPU job of a few seconds. Do that before submitting anything
-long, every time.
-
-**RL training on this environment.** See [`../../training/README.md`](../../training/README.md).
-
-## Non-negotiables
-
-- **`priorityClassName: train` in `pod_config`.** Without it your pods sit at priority 0
-  and get preempted by anything else in the queue, including a one-GPU probe. This has
-  killed a running 16-GPU job.
-- **No `sky launch -c`, no `num_nodes`.** See the two hard rules above. If you already
-  created a cluster, `sky status` will show it and `sky down <name>` releases it. Do that
-  now rather than at the end of the day.
-- **`/mnt/nvme` is node-local.** A dataset or config staged on one node does not exist on
-  another. Ship files with `file_mounts`, not by assuming a shared path.
-- **Unique `output_dir` per job.** Two jobs writing one output dir kills one of them at
-  its next checkpoint.
+- **`runAsUser: 0`** in the container `securityContext` — see above. The #1 thing people forget.
+- **The public `ml-hackathon` image, pinned by digest.** You cannot pull our other images and
+  you do not need a pull secret. Never `:latest` (an `IfNotPresent` launch can run a stale
+  cached image for hours).
+- **No `hostPath`.** The namespace forbids it (it is how you would reach the host's disks), so
+  `/mnt/nvme` and host paths are unavailable. Use an `emptyDir` volume for scratch/caches, and
+  point `HF_HOME`, `VLLM_CACHE_ROOT`, and your `output_dir` at it.
+- **No `privileged`, no host namespaces, no extra images.** All rejected at admission; do not
+  copy pod-security tricks from generic SkyPilot examples, they will not schedule here.
+- **`sky jobs launch`, not `sky launch -c`. No `num_nodes`.** See the two hard rules.
 
 ## Checking on things, non-interactively
 
 ```bash
-sky api info                    # connectivity
+sky api info                    # connectivity + your identity
 sky gpus list                   # capacity
-sky jobs queue                  # your jobs
+sky jobs queue                  # your jobs (you see only your own)
 sky jobs logs <name> --no-follow
 sky status                      # clusters YOU are holding — should be empty
 ```
 
-`sky status` should show nothing. If it lists a cluster, you are holding GPUs the rest of
-the room cannot use: `sky down <name>`.
-
-If your job is Pending, you are over your queue's quota and it will start when capacity
-frees. Do not retry-loop on Pending.
+If your job is **Pending**: either you asked for >4 GPUs (it will never start — lower it), or
+you are at your quota and it starts when capacity frees. Do not retry-loop on Pending.
 
 ## Failures and what they mean
 
 | Symptom | Cause and fix |
 |---|---|
 | Dashboard or endpoint unreachable | You are on a personal tailnet. Switch to the event one. |
-| `ErrImagePull ... 403` | The pull secret must exist in the `skypilot` namespace and your task must list it in `imagePullSecrets`. Ask an organizer. |
-| Pod stuck pulling a cached image | Set `imagePullPolicy: IfNotPresent`. A `:latest` tag defaults to `Always` and can trickle for hours. |
-| Job evicted mid-run, preemptee priority 0 | Missing `priorityClassName: train`. |
-| Files missing inside the pod | `/mnt/nvme` is node-local. |
-| Managed job FAILED but a pod still runs | `sky jobs cancel` the job. Deleting the pod directly gets it resurrected by the controller. |
-| Multiple vLLM servers on one node crash | Give each its own `--server.port`, `--data-parallel-rpc-port`, and `VLLM_PORT`, and stagger boots. |
+| Job dies in setup: `sudo: the "no new privileges" flag is set` | Missing `runAsUser: 0` in the container securityContext. |
+| Pod rejected: `violates PodSecurity "baseline"... hostPath volumes` | You used a `hostPath` volume (e.g. `/mnt/nvme`). Use an `emptyDir` instead. |
+| Pod rejected: `... may only run the approved hackathon image` | Wrong image. Use the digest-pinned `ml-hackathon/prime-rl-base` the organizers gave you. |
+| Job stuck **Pending**, never schedules | You asked for more than 4 GPUs. The quota caps you at 4; lower `accelerators`. |
+| `ErrImagePull` | You referenced a private image or added a pull secret. The hackathon image is public; drop `imagePullSecrets` and use the `ml-hackathon` digest. |
+| Files missing inside the pod | You assumed a shared node path. Ship files with `file_mounts`; scratch is your `emptyDir`, not `/mnt/nvme`. |
+| Managed job FAILED but a pod still runs | `sky jobs cancel` the job (deleting the pod directly gets it resurrected by the controller). |
 
 ## Long runs
 
-Everything here is a managed job already, but a run long enough to leave alone needs
-recovery configured, or it will not survive a preemption:
+Your jobs are preemptible, so anything long needs recovery configured or it won't survive:
 
 ```yaml
 resources:
@@ -143,7 +131,13 @@ resources:
     max_restarts_on_errors: 3
 ```
 
-plus `--ckpt.resume-step -1` in the run command. An evicted pod looks like a program
-failure to the controller, and a restarted attempt without resume refuses the checkpointed
-output dir and burns a restart. Managed attempts reuse the same pod name, so distinguish
-attempts by creation time.
+plus `--ckpt.resume-step -1` in the run command. An evicted pod looks like a program failure
+to the controller; a restart without resume refuses the checkpointed output dir and burns a
+restart. Point `output_dir` at your `/scratch` emptyDir (it is per-pod and does not survive
+teardown — copy anything you want to keep out with `sky` before the job ends, or push to your
+own storage).
+
+## RL training on this environment
+
+See [`../../training/README.md`](../../training/README.md) — the `run.yaml` there is already in
+this shape (public image, `runAsUser: 0`, emptyDir scratch, 4 GPUs).

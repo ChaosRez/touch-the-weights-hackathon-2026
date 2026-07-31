@@ -1,82 +1,101 @@
-# alien-api RL, single node, 8x H100, all-in-one `rl` launcher.
+# alien-api RL — hackathon guest config, single node, 4x H100 (2 trainer + 2 inference),
+# all-in-one `rl` launcher. LoRA on Qwen3-8B so the whole thing fits in the 4-GPU cap.
 #
-# STATUS: the [[orchestrator.train.env]] block below is schema-verified against
-# verifiers 0.2.2.dev36 (the env id resolves to AlienApiTaskset, and every knob under
-# .taskset is a real field on AlienApiTasksetConfig). The trainer/inference sections are
-# the standard single-node shape and have NOT been run against the training image. Do the
-# smoke in README.md before you launch anything long.
+# The [[orchestrator.train.env]] block is the v1 shape (schema-verified against verifiers
+# 0.2.2.dev36: the id resolves to AlienApiTaskset, every .taskset knob is a real field).
+# Do the smoke in README.md (2 steps) before any long run.
 
-output_dir = "/mnt/nvme/<your-team>/alien-api/run"
+output_dir = "/scratch/alien-api/run"     # writable emptyDir from run.yaml, NOT /mnt/nvme
 max_steps = 200
 seq_len = 32768
 
+# GPU split for the single node. 2 train + 2 infer = the 4-GPU team cap. `rl` places the
+# trainer on the first N and the vLLM inference replicas on the rest.
+[deployment]
+type = "single_node"
+gpus_per_node = 4
+num_train_gpus = 2
+num_infer_gpus = 2
+
 [model]
-# Pick for your quota. 8B fits comfortably on 8x H100 with room for the inference replicas.
 name = "Qwen/Qwen3-8B"
 
 [orchestrator]
-batch_size = 128
-# batch_size counts ROLLOUTS, not prompts. With group_size 8 that is 16 unique prompts
-# per gradient step. This is the single most expensive misreading of this config: a run
-# with batch_size 32 and group_size 8 sees FOUR unique prompts a step and plateaus well
-# below where it should, which reads as an algorithm problem and is not one.
-group_size = 8
+batch_size = 128          # ROLLOUTS not prompts: with group_size 8 that is 16 prompts/step.
+group_size = 8            # Do not drop batch_size to 32 — four prompts a step starves gradients.
 max_inflight_rollouts = 128
 max_off_policy_steps = 0
-num_train_workers = 4
+num_train_workers = 2
 collect_inference_metrics = true
 
 [orchestrator.optim]
-lr = 1e-06
+lr = 1e-05
+
+[orchestrator.model]
+name = "Qwen/Qwen3-8B"
+
+# LoRA keeps the trainer light enough for 2 GPUs. Full fine-tune of 8B does not fit the split.
+[orchestrator.model.lora]
+name = "alien-api-lora"
+rank = 32
+alpha = 64.0
 
 [orchestrator.train.sampling]
 temperature = 1.0
 max_completion_tokens = 8192
 
-# --- the environment -----------------------------------------------------------------
-# v1 SHAPE, and it is not the shape older configs in the monorepo use. A v1 env is
-# `env = { taskset = { id = ... } }`. The flat `id = "..."` form is the v0/legacy bridge:
-# use it here and prime-rl tries to load alien-api as a legacy env and fails.
+# --- the environment (v1 shape) ------------------------------------------------------
 [[orchestrator.train.env]]
 name = "alien-api"
 
 [orchestrator.train.env.env.taskset]
 id = "alien-api"
-# "" = all 240 episodes. This is a continual-learning environment: one sequential pass,
-# no epochs, no held-out split.
-split = ""
-# Tool returns pad toward this many tokens. Lowering it makes exploration cheaper and
-# raises value_correct, which unthrottles the teaching channel. Worth tuning for the
-# model tier you are actually training.
-artifact_verbosity = 22000
+split = ""                # "" = all 240 episodes, one sequential pass (the CL setup)
+artifact_verbosity = 22000   # tool returns pad toward this; lower it to make exploration cheaper
 
 [orchestrator.train.env.env.agent]
-# An episode's budget is 3 to ~12 tool calls; this is the hard ceiling, not the target.
 max_turns = 20
 
 [orchestrator.train.env.pool]
-# Rollouts here are env-bound, not generation-bound: each one makes many tool calls
-# against an in-process world. Four workers (the default) will starve the GPUs. Raise it
-# until GPU utilisation stops being the thing that is idle.
 type = "static"
-num_workers = 32
+num_workers = 32          # rollouts are env-bound (many tool calls); 4 leaves GPUs idle
 
-# NOTE: no [eval] block on purpose. There is no validation set in this setup. The learning
-# signal is the windowed acceptance and tool-call trend across the single sequential pass:
-# watch preference_accepted, value_correct, and tool_calls in W&B.
+# no [eval] block on purpose: single sequential pass, watch the windowed trend in W&B.
 
 [trainer]
 
+# The TRAINER's LoRA config carries target_modules (the orchestrator block above takes only
+# name/rank/alpha). ATTENTION-ONLY on purpose: prime-rl's default targets all linear layers
+# (attention + MLP), which makes the adapter large and makes vLLM's load_lora_adapter return
+# 500 at rollout start. Keep it to the four attention projections. (NO `name` here — trainer
+# LoRA rejects it; the name lives in [orchestrator.model.lora].)
+[trainer.model.lora]
+rank = 32
+alpha = 64.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
+
 [trainer.optim]
-lr = 1e-06
+lr = 1e-05
 
 [inference]
+
+# 2 inference GPUs as two independent 8B replicas (tp=1, dp=2). 8B fits on one H100.
+[inference.parallel]
+tp = 1
+dp = 2
 
 [ckpt]
 interval = 10
 keep_last = 4
 
-[wandb]
+# W&B: the `rl` entrypoint uses shared mode, so top-level `[wandb] offline=true` is REJECTED.
+# Default here is OFFLINE per-process (no key needed; data lands under output_dir/.../wandb).
+# To go ONLINE and watch curves live: set both offline=false below AND export WANDB_API_KEY
+# (and set WANDB_MODE=online / remove it from run.yaml).
+[orchestrator.wandb]
 project = "alien-api-hackathon"
-name = "<your-team>-run1"
-offline = false
+offline = true
+
+[trainer.wandb]
+project = "alien-api-hackathon"
+offline = true
