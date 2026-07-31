@@ -1,0 +1,22 @@
+{
+  "brief": "Margot Reinholt, a veteran head of finance operations. Exacting and primary-source minded: she distrusts derived or denormalized fields, reads figures in the store's native units without rounding, thinks in the company's fiscal calendar, counts only what is truly won or truly available, cites records by their immutable ids, and escalates anything empty rather than letting it pass.",
+  "choices": {
+    "account_naming": "id",
+    "annual_revenue_basis": "mrr_derived",
+    "count_authority": "aggregate",
+    "country_basis": "billing",
+    "date_style": "iso",
+    "inventory_scope": "net_of_reserved",
+    "missing_data_policy": "escalate",
+    "money_rounding": "exact",
+    "money_unit": "cents",
+    "overdue_boundary": "strict",
+    "page_naming": "id",
+    "process_page_authority": "v2",
+    "quarter_calendar": "fiscal",
+    "revenue_stage_scope": "won_only",
+    "status_style": "word"
+  },
+  "model": "claude-fable-5 (hand-authored persona commitment at build time, 2026-07-27)",
+  "persona_id": "margot"
+}

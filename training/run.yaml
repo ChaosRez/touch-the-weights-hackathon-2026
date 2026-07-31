@@ -1,0 +1,78 @@
+# alien-api RL on the cluster, single node, 8x H100.
+#
+# Launch from THIS directory (the file_mounts sources are relative to it):
+#   sky launch -c alien-rl -y --down run.yaml
+# Unattended:
+#   sky jobs launch -y -n alien-rl run.yaml
+name: alien-api-rl
+
+resources:
+  infra: kubernetes
+  accelerators: H100-80GB:8
+  # Ask an organizer for the current digest. Pin by digest, never `:latest`: a `:latest`
+  # launch with IfNotPresent can silently run a stale cached image for hours, and with
+  # Always it is correct but unrecorded, so the run cannot be reproduced.
+  image_id: docker:<registry>/ml/prime-rl-base@sha256:<digest>
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        # NOT optional. Without a priority class your pods sit at priority 0 and anything
+        # else in the queue preempts them, including a single one-GPU probe pod. This has
+        # killed a running multi-GPU job nine steps in.
+        priorityClassName: train
+        imagePullSecrets: [{name: ar-pull}]
+        containers:
+          - imagePullPolicy: IfNotPresent   # safe: the image is digest-pinned above
+            volumeMounts:
+              - {name: nvme, mountPath: /mnt/nvme}
+              - {name: shm, mountPath: /dev/shm}
+        volumes:
+          - {name: nvme, hostPath: {path: /mnt/nvme}}
+          - {name: shm, emptyDir: {medium: Memory, sizeLimit: 128Gi}}
+
+file_mounts:
+  # The env travels with the job. Do NOT point this at a copy on the node: /mnt/nvme is
+  # node-local, and whatever is sitting there is not necessarily the code you reviewed.
+  /tmp/alien-api-env: ../
+  /tmp/cfg/rl.toml: ./rl.toml
+
+envs:
+  HF_HOME: /mnt/nvme/.cache/huggingface
+  VLLM_CACHE_ROOT: /mnt/nvme/.cache/vllm
+  # W&B: ask an organizer for the secret name, or set WANDB_MODE=offline.
+  WANDB_MODE: offline
+
+setup: |
+  set -eo pipefail
+  cd /app
+  # Install the env library and its hub wrapper into the image's venv. The wrapper is
+  # what makes the id "alien-api" resolvable; the library is what it re-exports.
+  VIRTUAL_ENV=/app/.venv uv pip install -q -e /tmp/alien-api-env 2>&1 | tail -1
+  VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env/environments/alien-api 2>&1 | tail -1
+
+  # Fail here, cheaply, rather than 20 minutes into a run. Asserts: the env id resolves
+  # to the right taskset class, the committed fleet hydrates offline, and the pinned
+  # verifiers build is the one that actually got installed.
+  /app/.venv/bin/python - <<'PY'
+  import verifiers
+  from verifiers.v1.loaders import taskset_class, taskset_config_type
+  from alien_api_env.vf import AlienApiTaskset, AlienApiTasksetConfig
+
+  print("verifiers:", verifiers.__version__, flush=True)
+  cls = taskset_class("alien-api")
+  assert cls is AlienApiTaskset, f"env id resolved to {cls}"
+  assert "split" in taskset_config_type("alien-api").model_fields
+
+  tasks = list(AlienApiTaskset(AlienApiTasksetConfig(split="")).load())
+  assert len(tasks) == 240, f"expected 240 episodes, got {len(tasks)}"
+  print("preflight ok:", len(tasks), "episodes", flush=True)
+  PY
+
+run: |
+  set -x
+  cd /app
+  # --ckpt.resume-step -1 always resumes from the latest COMPLETE checkpoint. Without it
+  # a restarted attempt refuses the checkpointed output dir and burns a recovery restart.
+  .venv/bin/rl @ /tmp/cfg/rl.toml --ckpt.resume-step -1

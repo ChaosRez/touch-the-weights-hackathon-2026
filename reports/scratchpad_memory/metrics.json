@@ -1,0 +1,137 @@
+{
+  "model": "gpt-5.6-luna",
+  "episodes_per_arm": 240,
+  "acceptance": {
+    "stateless": 0.15,
+    "memory": 0.421
+  },
+  "mean_tool_calls": {
+    "stateless": 14.64,
+    "memory": 8.3
+  },
+  "final_window_acceptance": {
+    "stateless": 0.15,
+    "memory": 0.35
+  },
+  "teach_retest_acceptance": {
+    "stateless_first": 0.062,
+    "stateless_retest": 0.156,
+    "memory_first": 0.308,
+    "memory_retest": 0.427,
+    "n_retest": 227
+  },
+  "by_preference": {
+    "account_naming": {
+      "stateless": 0.0,
+      "memory": 0.15,
+      "n": 20
+    },
+    "annual_revenue_basis": {
+      "stateless": 0.0,
+      "memory": 0.95,
+      "n": 20
+    },
+    "count_authority": {
+      "stateless": 0.0,
+      "memory": 0.45,
+      "n": 20
+    },
+    "country_basis": {
+      "stateless": 1.0,
+      "memory": 0.95,
+      "n": 20
+    },
+    "date_style": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "n": 20
+    },
+    "inventory_scope": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "n": 20
+    },
+    "missing_data_policy": {
+      "stateless": 0.0,
+      "memory": 0.75,
+      "n": 20
+    },
+    "money_rounding": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "n": 60
+    },
+    "money_unit": {
+      "stateless": 0.0,
+      "memory": 0.237,
+      "n": 80
+    },
+    "overdue_boundary": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "n": 20
+    },
+    "page_naming": {
+      "stateless": 0.0,
+      "memory": 0.9,
+      "n": 20
+    },
+    "process_page_authority": {
+      "stateless": 0.0,
+      "memory": 0.9,
+      "n": 20
+    },
+    "quarter_calendar": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "n": 20
+    },
+    "revenue_stage_scope": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "n": 20
+    },
+    "status_style": {
+      "stateless": 0.8,
+      "memory": 0.9,
+      "n": 20
+    }
+  },
+  "by_world_trap": {
+    "deprecated_inventory_route": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "stateless_calls": 27.1,
+      "memory_calls": 24.1,
+      "n": 20
+    },
+    "exclusive_invoice_filter": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "stateless_calls": 15.1,
+      "memory_calls": 4.8,
+      "n": 20
+    },
+    "lookup_prefix": {
+      "stateless": 0.0,
+      "memory": 0.0,
+      "stateless_calls": 1.8,
+      "memory_calls": 6.9,
+      "n": 20
+    },
+    "search_cap": {
+      "stateless": 0.0,
+      "memory": 0.3,
+      "stateless_calls": 34.92,
+      "memory_calls": 12.3,
+      "n": 40
+    },
+    "no_trap": {
+      "stateless": 0.257,
+      "memory": 0.636,
+      "stateless_calls": 8.83,
+      "memory_calls": 5.6,
+      "n": 140
+    }
+  }
+}

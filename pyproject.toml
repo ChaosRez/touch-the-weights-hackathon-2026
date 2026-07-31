@@ -1,0 +1,70 @@
+[project]
+name = "alien-api-env"
+version = "4.1.0"
+description = "alien-api: preference-learning continual-learning environment — one stored world, one feedbacker, committed episode fleet (verifiers-v1)"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Proprietary" }
+authors = [{ name = "Construct Labs GmbH", email = "hello@constructlabs.com" }]
+keywords = ["verifiers", "rl-environment", "continual-learning", "benchmark"]
+dependencies = [
+    # PINNED, not a range. `verifiers>=0.2.1,<0.3` floats across prerelease dev builds:
+    # dev36 works, dev58 (what a fresh resolve gets) added a required `agent` field to
+    # `vf.Trace` and breaks every trace this env builds. Do not relax this pin during
+    # the event. See TROUBLESHOOTING.md.
+    "verifiers==0.2.2.dev36",
+    "numpy>=1.24.0",
+    # Runtime, NOT a dev extra: `count_tokens` silently falls back to a ~4-chars/token
+    # estimate without it, which changes artifact padding sizes. Pinned into the runtime
+    # so every participant and the cluster pad identically.
+    "tiktoken>=0.7",
+]
+
+[project.optional-dependencies]
+# The example outer loops (OpenAI Responses API driver).
+examples = ["openai>=1.0"]
+dev = ["pytest>=7", "pytest-asyncio>=0.23", "ruff>=0.4", "huggingface_hub>=0.20"]
+
+# No console scripts on purpose: the examples are meant to be READ and forked, so they
+# stay plain scripts under examples/ (`uv run python examples/scratchpad_loop.py`).
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["alien_api_env*"]
+
+# The frozen data ships in the wheel AND is committed in this repo, so a clone or a
+# wheel install both hydrate offline with no credentials.
+[tool.setuptools.package-data]
+alien_api_env = [
+    "feedbacker/profiles/*.json",
+    "feedbacker/feedback_cache/*.json",
+    "data/worlds/*/world.json",
+    "data/episodes/*.jsonl",
+]
+
+# verifiers is served by the prime-hub index, not PyPI, and is a prerelease build.
+[tool.uv]
+prerelease = "allow"
+
+[[tool.uv.index]]
+name = "prime-hub"
+url = "https://hub.primeintellect.ai/primeintellect/simple/"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["alien_api_env"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,13 @@
+# Data is COMMITTED in this repo on purpose (604 KB) so a clone hydrates offline.
+# Do not add src/alien_api_env/data/ here.
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+# Rollout outputs: these embed fleet prompts AND Margot's accepted labels.
+*.json.results
+live_traces/
+runs/

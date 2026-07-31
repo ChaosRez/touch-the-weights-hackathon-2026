@@ -1,0 +1,82 @@
+# alien-api RL, single node, 8x H100, all-in-one `rl` launcher.
+#
+# STATUS: the [[orchestrator.train.env]] block below is schema-verified against
+# verifiers 0.2.2.dev36 (the env id resolves to AlienApiTaskset, and every knob under
+# .taskset is a real field on AlienApiTasksetConfig). The trainer/inference sections are
+# the standard single-node shape and have NOT been run against the training image. Do the
+# smoke in README.md before you launch anything long.
+
+output_dir = "/mnt/nvme/<your-team>/alien-api/run"
+max_steps = 200
+seq_len = 32768
+
+[model]
+# Pick for your quota. 8B fits comfortably on 8x H100 with room for the inference replicas.
+name = "Qwen/Qwen3-8B"
+
+[orchestrator]
+batch_size = 128
+# batch_size counts ROLLOUTS, not prompts. With group_size 8 that is 16 unique prompts
+# per gradient step. This is the single most expensive misreading of this config: a run
+# with batch_size 32 and group_size 8 sees FOUR unique prompts a step and plateaus well
+# below where it should, which reads as an algorithm problem and is not one.
+group_size = 8
+max_inflight_rollouts = 128
+max_off_policy_steps = 0
+num_train_workers = 4
+collect_inference_metrics = true
+
+[orchestrator.optim]
+lr = 1e-06
+
+[orchestrator.train.sampling]
+temperature = 1.0
+max_completion_tokens = 8192
+
+# --- the environment -----------------------------------------------------------------
+# v1 SHAPE, and it is not the shape older configs in the monorepo use. A v1 env is
+# `env = { taskset = { id = ... } }`. The flat `id = "..."` form is the v0/legacy bridge:
+# use it here and prime-rl tries to load alien-api as a legacy env and fails.
+[[orchestrator.train.env]]
+name = "alien-api"
+
+[orchestrator.train.env.env.taskset]
+id = "alien-api"
+# "" = all 240 episodes. This is a continual-learning environment: one sequential pass,
+# no epochs, no held-out split.
+split = ""
+# Tool returns pad toward this many tokens. Lowering it makes exploration cheaper and
+# raises value_correct, which unthrottles the teaching channel. Worth tuning for the
+# model tier you are actually training.
+artifact_verbosity = 22000
+
+[orchestrator.train.env.env.agent]
+# An episode's budget is 3 to ~12 tool calls; this is the hard ceiling, not the target.
+max_turns = 20
+
+[orchestrator.train.env.pool]
+# Rollouts here are env-bound, not generation-bound: each one makes many tool calls
+# against an in-process world. Four workers (the default) will starve the GPUs. Raise it
+# until GPU utilisation stops being the thing that is idle.
+type = "static"
+num_workers = 32
+
+# NOTE: no [eval] block on purpose. There is no validation set in this setup. The learning
+# signal is the windowed acceptance and tool-call trend across the single sequential pass:
+# watch preference_accepted, value_correct, and tool_calls in W&B.
+
+[trainer]
+
+[trainer.optim]
+lr = 1e-06
+
+[inference]
+
+[ckpt]
+interval = 10
+keep_last = 4
+
+[wandb]
+project = "alien-api-hackathon"
+name = "<your-team>-run1"
+offline = false

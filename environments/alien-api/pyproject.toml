@@ -1,0 +1,37 @@
+[project]
+name = "alien-api"
+description = "alien-api: learn one company's latent structure and one reviewer's conventions from corrections (verifiers-v1 environment)"
+tags = ["tool-use", "multi-turn", "benchmark", "continual-learning-substrate", "preference-learning", "eval"]
+version = "4.1.0"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # Pinned to match the root pyproject. The range `>=0.2.1,<0.3` resolves to newer
+    # prereleases that break `vf.Trace`. See TROUBLESHOOTING.md.
+    "verifiers==0.2.2.dev36",
+    "alien-api-env",
+    "openai",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+include = ["alien_api.py", "pyproject.toml"]
+
+[tool.verifiers.eval]
+num_examples = 24
+rollouts_per_example = 1
+
+# verifiers 0.2.x is a prerelease dev build; allow prereleases and add the prime-hub
+# index (mirrors packages/canary-bench). PyPI still serves openai / the rest.
+[tool.uv]
+prerelease = "allow"
+
+[[tool.uv.index]]
+name = "prime-hub"
+url = "https://hub.primeintellect.ai/primeintellect/simple/"
+
+# The library is this repo's root package.
+[tool.uv.sources]
+alien-api-env = { path = "../..", editable = true }
