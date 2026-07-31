@@ -273,7 +273,50 @@ was found locally, since it was no longer needed. The technique is still the rig
 future failure hides in the env server: prime-rl redirects each env server's output to
 `<output_dir>/logs/envs/{train,eval}/<name>.log`, which never reaches the job log.
 
-## Job 122 — the fixed smoke, in progress
+## Job 122 — SMOKE PASSED
+
+`smoke.yaml` + `smoke-rl.toml` with the mcp pin applied in setup.
+
+```
+setup: mcp pin: patched -> # dependencies = ["openai", "mcp<2", "httpx", "tenacity"]
+22:41:22 SUCCESS Train environment(s) ready
+22:43:19 SUCCESS Step 1 | 22.5s | Reward 0.5000 | Trainable 2/4 (50.0%) | Turns 3.0 | Error 0.0%
+22:44:51 SUCCESS Step 2 | 22.6s | Reward 0.5000 | Trainable 2/20 (10.0%) | Turns 2.0 | Error 20.0%
+22:45:32 SUCCESS Orchestrator step loop done in 2m 35s
+22:45:34 SUCCESS Orchestrator finished.
+
+HarnessError count: 0
+```
+
+**Zero harness errors**, where every previous run was 100% failure. Rollouts execute, the
+agent takes turns against the MCP toolsets, episodes score, gradients are computed, and
+both steps complete. The pipeline works end to end.
+
+### Do not read `Reward 0.5000` as a performance number
+
+It is a structural artifact of this smoke config, not a measurement. The
+`zero_advantage` filter is **enforced** post-batch, so any group whose rollouts all score
+the same is dropped. With `group_size = 2` the only groups that survive are those with one
+1.0 and one 0.0 — whose mean is exactly 0.5, every time, by construction. Both steps
+reporting precisely `0.5000` is the tell.
+
+What it does legitimately tell you: Qwen3-8B **sometimes** hits an accepted answer, since
+mixed groups exist at all. Expect that to be the prior-aligned dimensions
+(`country_basis`, `status_style`), which score well even with no memory.
+
+For a real measurement use `rl.toml` (`group_size = 8`, `batch_size = 128`) and read the
+windowed trend in `preference_accepted` / `value_correct` / `tool_calls`, not `Reward`.
+
+### Other things worth noting from this run
+
+- `Error 20.0%` on step 2: a fifth of rollouts still error, down from 100%. Not fatal and
+  not yet diagnosed. Worth a look before a long run.
+- `empty train batch (0 of N generated rollouts shipped — all errored or filtered out)`
+  appears repeatedly and is mostly the zero-advantage filter doing its job on a model that
+  scores 0 on most episodes. It is only alarming if it persists — the orchestrator gives up
+  after 10 consecutive empty batches.
+- Step wall time is ~22s at this tiny size; the run spends far longer in model download and
+  vLLM startup than in training.
 
 The blind spot: prime-rl spawns each env server as a child process and redirects its
 stdout/stderr to `<output_dir>/logs/envs/{train,eval}/<name>.log`. The MCP servers are

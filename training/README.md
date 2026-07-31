@@ -15,55 +15,52 @@ Cluster access itself is in [`../skills/cluster/SKILL.md`](../skills/cluster/SKI
   vLLM's `load_lora_adapter` 500; see `rl.toml`)
 - the trainer starts and **rollouts begin**
 
-**Candidate fix for the MCP blocker (added 2026-07-31, not yet confirmed end to end).** The
-`HarnessError: harness 'bash' exited 1` failure names the harness, and `bash` is not a
-harness this environment should ever run. It is resolved by default: `default_harness_id()`
-falls back to `"bash"` whenever a taskset exports no `Harness` subclass, which alien-api does
-not. The bash harness is a code-executing coding agent (`EXECUTES_CODE=True`), while this env
-wants the plain tool-calling driver, `null` (`SUPPORTS_MCP=True`, `EXECUTES_CODE=False`) —
-the same one the fork's own MCP example uses (`configs/basic/wiki-search/rl.toml`).
-
-`rl.toml` now sets it explicitly:
+Two settings in `rl.toml` are load-bearing and easy to omit:
 
 ```toml
 [orchestrator.train.env.env.agent]
 harness = { id = "null", runtime = { type = "subprocess" } }
 ```
 
-`rl.toml` also now sets `[inference.model] tool_call_parser = "hermes"`, without which vLLM
-hands Qwen's tool calls back as plain assistant text and every rollout scores 0 with
-`tool_calls=0`.
+Without it the harness resolves via `default_harness_id()`, which falls back to **`bash`**
+for any taskset exporting no `Harness` subclass — which alien-api does not. `bash` is a
+code-executing coding agent (`EXECUTES_CODE=True`); this env wants the plain tool-calling
+driver `null` (`SUPPORTS_MCP=True`, `EXECUTES_CODE=False`), the same one the fork's own MCP
+example uses (`configs/basic/wiki-search/rl.toml`).
 
-**Status: the harness change is UNTESTED.** A 4x H100 Qwen3-0.6B smoke (job 118) was meant
-to test it and never got far enough to say anything. It failed *before the first rollout*,
-so the harness code path was never exercised. Do not read the change as verified.
-
-That smoke failed on something else entirely, worth knowing about because it is upstream of
-every rollout:
-
-```
-Updating policy in-flight to v0          <- last progress, then ~11 min of silence
-orchestrator.py:456 start
-  -> client.py:444 update_weights
-    -> client.py:394 _resume_engines
-      -> client.py:362 _admin_post
-        -> httpx.ReadTimeout             -> Orchestrator failed with exit code 1
+```toml
+[inference.model]
+tool_call_parser = "hermes"
 ```
 
-The weight-update admin POST to vLLM timed out. Prime suspect is an inference topology
-mismatch: that smoke config omitted `[inference.parallel]`, and the log shows
-`Initializing NCCL broadcast: 1 servers, inference_world_size=1, gpus_per_server=1` while
-`num_infer_gpus = 2`. Two GPUs were allocated to inference but the broadcast believed there
-was one. **The `rl.toml` in this repo sets `[inference.parallel] tp = 1, dp = 2`, so it may
-not hit this** — but that is untested too, and it is the first thing to check if a run hangs
-at `Updating policy in-flight`.
+Without a parser vLLM hands Qwen's tool calls back as plain assistant text: no tool calls
+reach the harness and every rollout scores 0 with `tool_calls=0`, which reads as a weak
+model rather than a config error.
 
-Note also that a stalled job looks identical to a healthy one in `sky jobs queue`: status
-stays `RUNNING` and the streamed log goes quiet. Read the log, not the status.
+**Status: VERIFIED on 4x H100 (job 122, 2026-08-01).** Qwen3-8B + LoRA, two steps, zero
+harness errors, orchestrator finished cleanly. Rollouts execute, the agent takes turns
+against the MCP toolsets, episodes score, and gradients are computed.
 
-**Cluster requirements** (all in `run.yaml` already): the public `ml-hackathon` image
-digest-pinned, `runAsUser: 0`, an `emptyDir` scratch (no `hostPath`/`/mnt/nvme`), and 4 GPUs
-max. See [`../skills/cluster/SKILL.md`](../skills/cluster/SKILL.md).
+Getting there required one workaround that `run.yaml` applies for you, for an upstream
+verifiers bug. The two sides of MCP resolve different major versions:
+
+| side | where | version |
+|---|---|---|
+| MCP server | the verifiers venv | 1.29.0 |
+| MCP client | the harness's isolated uv script env | 2.0.0 |
+
+The harness program is a PEP 723 script with an unpinned `"mcp"` in its header, so
+`uv run --script` takes the newest, and a 2.x client hangs forever in `initialize()`
+against a 1.x server. Every rollout dies as `HarnessError: harness 'null' exited 1`. This
+became fatal the day mcp 2.0.0 shipped; nothing in prime-rl or this env changed.
+
+`run.yaml` patches the header to `mcp<2` during setup and fails loudly if the header shape
+changes. The reverse fix is impossible: verifiers imports `mcp.server.fastmcp`, which
+2.0.0 removed. Full detail in [`RUNLOG.md`](RUNLOG.md).
+
+**Read `Reward` in a smoke with care.** With `group_size = 2` and the enforced
+`zero_advantage` filter, only groups containing both a 1.0 and a 0.0 survive, so the mean
+is exactly 0.5 by construction. It is not a performance measurement.
 
 ## The one config trap
 
@@ -115,8 +112,19 @@ no env configured — set env = { taskset = { id = "<id>" } } (v1) or id = "<id>
    why both installs use `--no-deps` — letting uv apply our pin would swap the image's
    verifiers out from under prime-rl mid-setup.
 
-3. **Two steps, then stop.** `max_steps = 2`, watch that rollouts complete and rewards are
-   not all zero, then set it back.
+3. **The two-step smoke.** `smoke.yaml` + `smoke-rl.toml`: the same config with every
+   concurrency knob at the floor and `max_steps = 2`. This is the run that is verified
+   (job 122).
+
+   ```bash
+   sky jobs launch -y -n alien-smoke smoke.yaml
+   ```
+
+   Success looks like `SUCCESS Step 1 ... SUCCESS Step 2 ... Orchestrator finished.` with
+   **zero** `HarnessError` lines. Takes about 6 minutes, most of it model download and
+   vLLM startup.
+
+4. **Then the real run**, `run.yaml` + `rl.toml`.
 
 Do not reach for an interactive box for any of this. `sky launch -c` holds its GPUs until
 someone tears it down, and with every team on one pool that is capacity taken out of the
