@@ -5,16 +5,24 @@ Cluster access itself is in [`../skills/cluster/SKILL.md`](../skills/cluster/SKI
 
 ## Read this before you launch
 
-**Verified locally**, against `verifiers 0.2.2.dev36`:
+**Verified on the training image (2026-07-31)**, launched as a hackathon guest via
+`sky jobs launch`, 4x H100 (2 trainer + 2 inference), Qwen3-8B + LoRA:
 
-- the env id `alien-api` resolves to module `alien_api` and class `AlienApiTaskset`
-- with no `Env` subclass exported, it runs under the builtin `SingleAgentEnv`
-- every knob in the `.taskset` block is a real field on `AlienApiTasksetConfig`
-- the committed fleet hydrates offline, 240 episodes, no credentials
+- the pod is admitted and provisions; `setup` installs the env and the preflight passes
+  (240 episodes hydrate offline)
+- vLLM comes up and the **LoRA adapter loads** — this requires attention-only
+  `target_modules` in `[trainer.model.lora]` (the prime-rl default targets all-MLP and makes
+  vLLM's `load_lora_adapter` 500; see `rl.toml`)
+- the trainer starts and **rollouts begin**
 
-**Not verified**: none of this has been run against the training image. The trainer and
-inference sections are the standard single-node shape, not a config proven on that stack.
-Budget time for the smoke below and do not schedule a long run before it passes.
+**Known blocker (env side, being fixed by the organizers):** the `crm`/`wiki`/`answer`
+toolset MCP servers time out on `session.initialize()` under prime-rl's rollout harness, so
+rollouts currently fail with `HarnessError: harness 'bash' exited 1`. Ask an organizer whether
+this is resolved before scheduling a real run.
+
+**Cluster requirements** (all in `run.yaml` already): the public `ml-hackathon` image
+digest-pinned, `runAsUser: 0`, an `emptyDir` scratch (no `hostPath`/`/mnt/nvme`), and 4 GPUs
+max. See [`../skills/cluster/SKILL.md`](../skills/cluster/SKILL.md).
 
 ## The one config trap
 

@@ -172,17 +172,21 @@ reports/               the measured outer-loop result
 
 ## If you use the GPU cluster
 
-Two rules, because every team shares one pool of GPUs:
+You run in an isolated `hackathon` workspace: you see only your own jobs, you have a hard
+**4-GPU cap**, and your jobs are low-priority (preemptible on spare capacity). Three rules,
+because every team shares one pool:
 
 - **Submit jobs, do not create clusters.** `sky jobs launch`, never `sky launch -c <name>`.
-  A named cluster holds its GPUs until someone runs `sky down`, including while you read
-  logs, edit code, or sleep. A managed job gives them back when it finishes. Check with
-  `sky status`, which should show nothing.
-- **Single node.** Do not set `num_nodes`. Multi-node jobs are admitted all-or-nothing, so
-  they block the queue waiting for a whole second node while running nothing.
+  A named cluster holds its GPUs until someone runs `sky down`; a managed job gives them back
+  when it finishes. Check with `sky status`, which should show nothing.
+- **Single node, <= 4 GPUs.** Do not set `num_nodes`. A request over 4 GPUs is quota-rejected
+  and sits Pending forever.
+- **Use the required pod shape.** Every guest task needs the public `ml-hackathon` image
+  (digest-pinned, no pull secret), `runAsUser: 0`, and an `emptyDir` scratch volume (no
+  `hostPath` / `/mnt/nvme`). Miss any and the job fails at admission or in setup.
 
-Nothing in this repo needs either. The training config is single node, and everything else
-runs on your laptop. Details in [`skills/cluster/SKILL.md`](skills/cluster/SKILL.md).
+The training config here is single node and fits the 4-GPU cap. The exact shape, the failure
+table, and a copy-paste task template are in [`skills/cluster/SKILL.md`](skills/cluster/SKILL.md).
 
 ## Pointers
 

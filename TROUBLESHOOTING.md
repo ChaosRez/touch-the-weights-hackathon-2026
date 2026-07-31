@@ -102,6 +102,14 @@ raising it is the fastest way to get yourself rate limited.
 
 ## Cluster problems
 
-See [`skills/cluster/SKILL.md`](skills/cluster/SKILL.md). The two that cost the most time:
-your pods need `priorityClassName: train` or they get preempted by anything, and
-`/mnt/nvme` is node-local so a file you staged on one node is not there on another.
+See [`skills/cluster/SKILL.md`](skills/cluster/SKILL.md) for the full table. The three that
+cost the most time:
+
+- **Job dies in setup with `sudo: the "no new privileges" flag is set`** — you are missing
+  `runAsUser: 0` in the container `securityContext`. The image runs as a non-root user;
+  SkyPilot bootstraps ssh/ray as root and needs this.
+- **Pod rejected `... hostPath volumes` or job stuck Pending** — you used a `hostPath` (e.g.
+  `/mnt/nvme`, which the namespace forbids — use an `emptyDir`), or you asked for more than
+  the 4-GPU cap (a >4-GPU request is quota-rejected and sits Pending forever).
+- **`ErrImagePull` or `... may only run the approved image`** — use the public, digest-pinned
+  `ml-hackathon/prime-rl-base` image the organizers gave you, with no `imagePullSecrets`.
