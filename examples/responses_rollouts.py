@@ -37,8 +37,11 @@ from verifiers.v1.types import ToolMessage
 from alien_api_env.vf import AlienApiTaskset, AlienApiTasksetConfig
 from alien_api_env.vf.tools import AnswerToolset, CrmToolset, WikiToolset
 
-# Override with ALIEN_API_MODEL. Must be an OpenAI Responses-API model.
-MODEL = os.environ.get("ALIEN_API_MODEL", "gpt-5.6")
+# Override with ALIEN_API_MODEL. Must be an OpenAI Responses-API model id that actually
+# exists on your account: the 5.6 family ships as named variants (`-luna`, `-sol`,
+# `-terra`), there is no bare `gpt-5.6`. `luna` is the model the reports/ trial used, so
+# it is the one whose numbers are comparable.
+MODEL = os.environ.get("ALIEN_API_MODEL", "gpt-5.6-luna")
 EFFORT = "medium"
 MAX_TOOL_TURNS = 12
 CONCURRENCY = 4
@@ -104,7 +107,13 @@ def _tool_defs(toolsets):
                 {
                     "type": "function",
                     "name": name,
-                    "description": (fn.__doc__ or name).strip().split("\n\n")[0],
+                    # The FULL docstring, not just the first paragraph. Several tools
+                    # state their constraints below the summary line (query_report names
+                    # the one metric it supports), and truncating to the first paragraph
+                    # hides them: an agent then brute-forces metric names against a closed
+                    # vocabulary, burns its whole turn budget on `unknown_metric`, and
+                    # submits nothing. Measured: 28 wasted calls on one episode.
+                    "description": inspect.cleandoc(fn.__doc__ or name),
                     "parameters": {
                         "type": "object",
                         "properties": props,

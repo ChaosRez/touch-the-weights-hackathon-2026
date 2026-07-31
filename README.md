@@ -73,7 +73,7 @@ Then a real rollout, which needs a key:
 
 ```bash
 export OPENAI_API_KEY=<your key>
-export ALIEN_API_MODEL=gpt-5.6                       # optional, this is the default
+export ALIEN_API_MODEL=gpt-5.6-luna                # optional, this is the default
 uv run python examples/responses_rollouts.py --n 10  # stateless baseline
 uv run python examples/scratchpad_loop.py --n 30     # memory arm vs stateless, paired
 ```

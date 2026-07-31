@@ -4,7 +4,7 @@ Three scripts. Read `responses_rollouts.py` first: the other two build on it.
 
 ```bash
 export OPENAI_API_KEY=<your key>
-export ALIEN_API_MODEL=gpt-5.6      # optional, this is the default
+export ALIEN_API_MODEL=gpt-5.6-luna # optional, this is the default
 ```
 
 ## `responses_rollouts.py` — the stateless baseline
