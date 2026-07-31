@@ -213,7 +213,67 @@ the image ships, works on a laptop. Something about the pod is the difference.
 Eliminated so far: missing entrypoints, read timeouts, stdio/env mismatch, concurrency,
 verifiers version, and the toolset code itself.
 
-## Job 121 — debug, in progress
+## ROOT CAUSE — an mcp major-version split across the two sides of the harness
+
+Found locally, not on the cluster. The faithful reproduction is two processes, which is
+the one thing the earlier in-process test was missing: serve the toolsets, then run the
+**real** null-harness program as a separate `uv run --script` process against them, exactly
+as prime-rl does. That reproduces the failure on a laptop, byte for byte:
+
+```
+mcp_session(spec) -> await session.initialize()
+asyncio.exceptions.CancelledError: Cancelled via cancel scope
+```
+
+The two sides run different **major** versions of `mcp`:
+
+| side | where | version |
+|---|---|---|
+| MCP **server** | the verifiers venv (`/app/.venv`) | **1.29.0** |
+| MCP **client** | the harness's isolated uv script env | **2.0.0** |
+
+The harness program is a PEP 723 script and its header declares
+
+```python
+# dependencies = ["openai", "mcp", "httpx", "tenacity"]
+```
+
+**unpinned**, so `uv run --script` resolves whatever `mcp` is newest. Since mcp 2.0.0 was
+published that is a 2.x client talking to a 1.x server, and `initialize` never returns.
+
+This is why every other hypothesis failed to explain it: nothing in prime-rl, the image, or
+this environment changed. The bug was latent and became fatal the day mcp 2.0.0 shipped.
+
+### The fix, and why it can only go one way
+
+Pin the **harness** below 2. Verified locally:
+
+```
+# dependencies = ["openai", "mcp<2", "httpx", "tenacity"]
+-> served crm_toolset / wiki_toolset / answer_toolset
+-> MCP phase passed (only the deliberately-dead model endpoint failed afterwards)
+```
+
+Upgrading the **server** to mcp 2.x instead is not possible — verifiers imports
+`mcp.server.fastmcp`, which 2.0.0 removed:
+
+```
+ModuleNotFoundError: No module named 'mcp.server.fastmcp'
+```
+
+So `run.yaml`'s setup patches the installed `program.py` header in place, and **fails
+loudly** if the header is not in the expected shape, so a future image cannot silently skip
+the patch and quietly reintroduce the hang. This is a workaround; the real fix is a pin in
+the fork.
+
+## Job 121 — debug, CANCELLED (superseded)
+
+Would have dumped the env server logs from inside the pod. Cancelled once the root cause
+was found locally, since it was no longer needed. The technique is still the right one if a
+future failure hides in the env server: prime-rl redirects each env server's output to
+`<output_dir>/logs/envs/{train,eval}/<name>.log`, which never reaches the job log.
+
+## Job 122 — the fixed smoke, in progress
 
 The blind spot: prime-rl spawns each env server as a child process and redirects its
 stdout/stderr to `<output_dir>/logs/envs/{train,eval}/<name>.log`. The MCP servers are

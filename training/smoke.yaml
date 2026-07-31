@@ -62,6 +62,47 @@ setup: |
   # unchanged.
   VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env 2>&1 | tail -1
   VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env/environments/alien-api 2>&1 | tail -1
+
+  # ---------------------------------------------------------------------------------
+  # WORKAROUND for an upstream verifiers bug. Remove once the fork pins this itself.
+  #
+  # Every rollout dies with `HarnessError: harness 'null' exited 1` and, underneath,
+  # `session.initialize()` cancelled, because the two sides of MCP run different MAJOR
+  # versions:
+  #
+  #   server side  (verifiers venv)      mcp 1.29.0
+  #   harness side (isolated uv script)  mcp 2.0.0
+  #
+  # The harness program is a PEP 723 script whose header declares an UNPINNED
+  # `dependencies = ["openai", "mcp", "httpx", "tenacity"]`, so `uv run --script` resolves
+  # whatever mcp is newest. Since mcp 2.0.0 shipped, that is a 2.x client talking to a 1.x
+  # server, and `initialize` never returns. This was latent and became fatal on the day
+  # mcp 2.0.0 was published — nothing in prime-rl or this env changed.
+  #
+  # Fixing it the other way (upgrading the server to mcp 2.x) is NOT possible: verifiers'
+  # server imports `mcp.server.fastmcp`, which 2.0.0 removed. Verified both directions
+  # locally with a two-process reproduction.
+  #
+  # Fails loudly if the header has changed shape, so a future image cannot silently skip
+  # the patch and reintroduce the hang.
+  /app/.venv/bin/python - <<'PY'
+  from pathlib import Path
+  import verifiers.v1.harnesses.null.harness as h
+  p = Path(h.__file__).parent / "program.py"
+  s = p.read_text()
+  old = '# dependencies = ["openai", "mcp", "httpx", "tenacity"]'
+  new = '# dependencies = ["openai", "mcp<2", "httpx", "tenacity"]'
+  if new in s:
+      print("mcp pin: already present", flush=True)
+  elif old in s:
+      p.write_text(s.replace(old, new))
+      print("mcp pin: patched ->", new, flush=True)
+  else:
+      raise SystemExit(
+          "PEP 723 header is not in the expected form; re-check the mcp pin workaround.\n"
+          + "\n".join(s.splitlines()[:6])
+      )
+  PY
   # Fail cheaply here rather than 20 minutes into a run: env id resolves, fleet hydrates to
   # 240 episodes offline, and the pinned verifiers build is the one installed.
   /app/.venv/bin/python - <<'PY'
