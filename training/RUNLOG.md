@@ -168,14 +168,58 @@ harness was wrong *and* MCP was broken, and fixing the first did not fix the sec
 simultaneously** on one pod, each spawning a harness subprocess and its own MCP sessions
 against three servers. That is the next thing to eliminate.
 
-## Job 120 — in progress
+## Job 120 — CANCELLED. Concurrency hypothesis REJECTED.
 
-`smoke-rl.toml` + `smoke.yaml`: identical to `rl.toml` except every concurrency knob is at
-the floor (`batch_size 4`, `group_size 2`, `max_inflight_rollouts 4`,
-`pool.num_workers 2`, `max_completion_tokens 1024`, `max_steps 2`).
+`smoke-rl.toml`: every concurrency knob at the floor (`batch_size 4`, `group_size 2`,
+`max_inflight_rollouts 4`, `pool.num_workers 2`).
 
-Single variable under test: **is the MCP failure load-induced or absolute?** If this passes
-and `rl.toml` does not, the fix is concurrency limits. If this fails identically, MCP is
-broken at any scale and the environment or the image needs the fix.
+```
+22:24:42 Train batch 0/4 (0.0%); 4 inflight rollouts (train=4, eval=0)
+22:24:45 Rollout failed ... HarnessError: harness 'null' exited 1
+22:24:48 Rollout failed ... HarnessError: harness 'null' exited 1
+```
 
-Result: pending.
+**Four** inflight rollouts fail exactly as **128** did. The MCP failure is absolute, not
+load-induced. Cancelled after 35 minutes — note it never self-terminates, it retries
+failing rollouts forever, so always bound a debug run.
+
+## What the local reproduction eliminated
+
+Rather than keep paying 4 GPUs per hypothesis, the MCP path was reproduced on a laptop:
+launch `CrmToolset` through the real `verifiers.v1.mcp.launch.serve()` and connect exactly
+as the null harness does (streamable HTTP, `ClientSession`, `initialize()`, `list_tools()`).
+
+```
+toolset runtime config: type='subprocess'
+server url: http://127.0.0.1:61815/mcp
+connected, calling initialize()...
+INITIALIZE OK
+LIST_TOOLS OK: 11 tools -> ['count_accounts', 'get_account', 'get_inventory', ...]
+```
+
+Then repeated in a venv built to mirror the cluster exactly — `verifiers==0.2.2.dev17`
+(the image's build) with the env installed `--no-deps`:
+
+```
+verifiers: 0.2.2.dev17
+INITIALIZE OK
+LIST_TOOLS OK: 11 tools
+```
+
+**So the verifiers version is not the cause, and neither is the environment's MCP code.**
+The same toolset, the same launcher, the same client protocol, on the same verifiers build
+the image ships, works on a laptop. Something about the pod is the difference.
+
+Eliminated so far: missing entrypoints, read timeouts, stdio/env mismatch, concurrency,
+verifiers version, and the toolset code itself.
+
+## Job 121 — debug, in progress
+
+The blind spot: prime-rl spawns each env server as a child process and redirects its
+stdout/stderr to `<output_dir>/logs/envs/{train,eval}/<name>.log`. The MCP servers are
+launched from inside that process, so **every MCP startup error lands in that file and
+never in the job log**. Everything seen so far is the client side saying "initialize was
+cancelled", which cannot say why.
+
+`debug.yaml` runs the smoke under `timeout 900` and then dumps every `*.log` under
+`/scratch`, which is where the answer should be.
