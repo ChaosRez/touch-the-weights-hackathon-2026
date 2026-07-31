@@ -34,9 +34,32 @@ harness = { id = "null", runtime = { type = "subprocess" } }
 hands Qwen's tool calls back as plain assistant text and every rollout scores 0 with
 `tool_calls=0`.
 
-Status: a 4x H100 Qwen3-0.6B smoke with the `null` harness ran rollouts for over ten minutes
-with no `HarnessError`, where the bash-harness run failed. That is not yet proof the MCP
-timeout is gone. Re-run the smoke and confirm steps complete before scheduling a long run.
+**Status: the harness change is UNTESTED.** A 4x H100 Qwen3-0.6B smoke (job 118) was meant
+to test it and never got far enough to say anything. It failed *before the first rollout*,
+so the harness code path was never exercised. Do not read the change as verified.
+
+That smoke failed on something else entirely, worth knowing about because it is upstream of
+every rollout:
+
+```
+Updating policy in-flight to v0          <- last progress, then ~11 min of silence
+orchestrator.py:456 start
+  -> client.py:444 update_weights
+    -> client.py:394 _resume_engines
+      -> client.py:362 _admin_post
+        -> httpx.ReadTimeout             -> Orchestrator failed with exit code 1
+```
+
+The weight-update admin POST to vLLM timed out. Prime suspect is an inference topology
+mismatch: that smoke config omitted `[inference.parallel]`, and the log shows
+`Initializing NCCL broadcast: 1 servers, inference_world_size=1, gpus_per_server=1` while
+`num_infer_gpus = 2`. Two GPUs were allocated to inference but the broadcast believed there
+was one. **The `rl.toml` in this repo sets `[inference.parallel] tp = 1, dp = 2`, so it may
+not hit this** — but that is untested too, and it is the first thing to check if a run hangs
+at `Updating policy in-flight`.
+
+Note also that a stalled job looks identical to a healthy one in `sky jobs queue`: status
+stays `RUNNING` and the streamed log goes quiet. Read the log, not the status.
 
 **Cluster requirements** (all in `run.yaml` already): the public `ml-hackathon` image
 digest-pinned, `runAsUser: 0`, an `emptyDir` scratch (no `hostPath`/`/mnt/nvme`), and 4 GPUs
