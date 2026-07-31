@@ -15,10 +15,28 @@ Cluster access itself is in [`../skills/cluster/SKILL.md`](../skills/cluster/SKI
   vLLM's `load_lora_adapter` 500; see `rl.toml`)
 - the trainer starts and **rollouts begin**
 
-**Known blocker (env side, being fixed by the organizers):** the `crm`/`wiki`/`answer`
-toolset MCP servers time out on `session.initialize()` under prime-rl's rollout harness, so
-rollouts currently fail with `HarnessError: harness 'bash' exited 1`. Ask an organizer whether
-this is resolved before scheduling a real run.
+**Candidate fix for the MCP blocker (added 2026-07-31, not yet confirmed end to end).** The
+`HarnessError: harness 'bash' exited 1` failure names the harness, and `bash` is not a
+harness this environment should ever run. It is resolved by default: `default_harness_id()`
+falls back to `"bash"` whenever a taskset exports no `Harness` subclass, which alien-api does
+not. The bash harness is a code-executing coding agent (`EXECUTES_CODE=True`), while this env
+wants the plain tool-calling driver, `null` (`SUPPORTS_MCP=True`, `EXECUTES_CODE=False`) —
+the same one the fork's own MCP example uses (`configs/basic/wiki-search/rl.toml`).
+
+`rl.toml` now sets it explicitly:
+
+```toml
+[orchestrator.train.env.env.agent]
+harness = { id = "null", runtime = { type = "subprocess" } }
+```
+
+`rl.toml` also now sets `[inference.model] tool_call_parser = "hermes"`, without which vLLM
+hands Qwen's tool calls back as plain assistant text and every rollout scores 0 with
+`tool_calls=0`.
+
+Status: a 4x H100 Qwen3-0.6B smoke with the `null` harness ran rollouts for over ten minutes
+with no `HarnessError`, where the bash-harness run failed. That is not yet proof the MCP
+timeout is gone. Re-run the smoke and confirm steps complete before scheduling a long run.
 
 **Cluster requirements** (all in `run.yaml` already): the public `ml-hackathon` image
 digest-pinned, `runAsUser: 0`, an `emptyDir` scratch (no `hostPath`/`/mnt/nvme`), and 4 GPUs
@@ -59,16 +77,20 @@ no env configured — set env = { taskset = { id = "<id>" } } (v1) or id = "<id>
    Should print `AlienApiTaskset`. If it raises, the hub wrapper in
    `environments/alien-api/` is not installed: `uv pip install --no-deps -e environments/alien-api`.
 
-2. **A preflight job, before any training.** Not a dev box: submit `run.yaml` with the
-   `run:` block replaced by `echo preflight only`. The `setup:` block already installs the
-   env and asserts the id resolves, the fleet hydrates to 240 episodes, and the image's
-   `verifiers` build matches the pin. It costs one node for under a minute and catches the
-   two things most likely to be wrong.
+2. **A preflight job, before any training.** Not a dev box: `preflight.yaml` is one GPU for
+   under a minute, in the same guest task shape as `run.yaml`. It prints the image's
+   `verifiers` build, installs the env, resolves the id, hydrates all 240 episodes, and
+   runs a full score/finalize.
 
    ```bash
-   sky jobs launch -y -n alien-preflight run.yaml
+   sky jobs launch -y -n alien-preflight preflight.yaml
    sky jobs logs alien-preflight
    ```
+
+   Verified 2026-07-31: the image ships **`verifiers 0.2.2.dev17`**, not the
+   `0.2.2.dev36` this repo pins for laptop use, and the env runs on it unchanged. That is
+   why both installs use `--no-deps` — letting uv apply our pin would swap the image's
+   verifiers out from under prime-rl mid-setup.
 
 3. **Two steps, then stop.** `max_steps = 2`, watch that rollouts complete and rewards are
    not all zero, then set it back.

@@ -1,0 +1,93 @@
+# Cheap compatibility probe: does alien-api load inside the training image?
+#
+#   sky jobs launch -y -n alien-preflight preflight.yaml
+#   sky jobs logs alien-preflight
+#
+# One GPU, under a minute. Run it before any training job and after any image rotation.
+# It answers the one question a laptop cannot: whether the env works against the
+# `verifiers` build the IMAGE ships. That build is a git submodule pin inside the prime-rl
+# fork, NOT the version this repo pins in pyproject.toml for local use, and the two differ
+# (image: 0.2.2.dev17, repo pin: 0.2.2.dev36).
+#
+# Same guest task shape as run.yaml: public image, runAsUser 0, emptyDir scratch, <=4 GPUs.
+name: alien-preflight
+
+resources:
+  infra: kubernetes
+  accelerators: H100-80GB:1
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          # REQUIRED, same as run.yaml: the image runs as a non-root user and SkyPilot
+          # bootstraps ssh/ray as root. Without it the job dies in setup with
+          # "sudo: The 'no new privileges' flag is set".
+          - securityContext:
+              runAsUser: 0
+            volumeMounts:
+              - {name: scratch, mountPath: /scratch}
+        volumes:
+          - {name: scratch, emptyDir: {sizeLimit: 20Gi}}
+
+file_mounts:
+  /tmp/alien-api-env: ..
+
+envs:
+  HF_HOME: /scratch/hf
+
+run: |
+  set -eo pipefail
+  cd /app
+  echo "=== image build info ==="
+  cat /app/BUILD_INFO 2>/dev/null || echo "(no BUILD_INFO)"
+
+  echo "=== verifiers the IMAGE ships (authoritative on the cluster) ==="
+  .venv/bin/python -c "import verifiers; print('verifiers', verifiers.__version__)"
+
+  # --no-deps on BOTH: never let our pin replace the image's verifiers. See run.yaml.
+  echo "=== installing alien-api (no deps) ==="
+  VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env
+  VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env/environments/alien-api
+  .venv/bin/python -c "import verifiers; print('verifiers after install', verifiers.__version__)"
+
+  echo "=== env resolution, hydration, and the full scoring path ==="
+  .venv/bin/python - <<'PY'
+  import asyncio
+  from verifiers.v1.loaders import taskset_class, taskset_config_type, default_harness_id
+  from alien_api_env.certify.traces import build_trace
+  from alien_api_env.vf import AlienApiTaskset, AlienApiTasksetConfig
+
+  cls = taskset_class("alien-api")
+  print("env id 'alien-api' ->", cls.__name__)
+  assert cls is AlienApiTaskset
+  assert "split" in taskset_config_type("alien-api").model_fields
+
+  # Loud reminder of why rl.toml sets the harness explicitly: the resolved default is
+  # "bash", a code-executing coding-agent harness, not a plain tool-calling one.
+  print("default harness (NOT what rl.toml uses):", default_harness_id("alien-api"))
+
+  tasks = list(AlienApiTaskset(AlienApiTasksetConfig(split="")).load())
+  print("fleet hydrated:", len(tasks), "episodes")
+  assert len(tasks) == 240
+
+  async def main():
+      t = tasks[0]
+      # build_trace is the call that breaks on newer verifiers prereleases (vf.Trace
+      # gained a required `agent` field), so this is the real compatibility gate.
+      tr = build_trace(t, t.data.accepted, tool_returns=[])
+      await t.score(tr)
+      await t.finalize(tr, None)
+      print("score on accepted label:", tr.reward, "| feedback:", tr.info["feedback"][:40])
+      assert tr.reward == 1.0
+
+  asyncio.run(main())
+  print("PREFLIGHT OK")
+  PY
+
+  echo "=== MCP toolsets import ==="
+  .venv/bin/python -c "
+  from alien_api_env.vf.tools import CrmToolset, WikiToolset, AnswerToolset
+  print('toolsets import clean')"

@@ -55,7 +55,12 @@ setup: |
   cd /app
   # Install the env library + its hub wrapper into the image's venv. The wrapper makes the
   # id "alien-api" resolvable; the library is what it re-exports.
-  VIRTUAL_ENV=/app/.venv uv pip install -q -e /tmp/alien-api-env 2>&1 | tail -1
+  # --no-deps ON BOTH. This repo pins verifiers==0.2.2.dev36 for laptop use; the IMAGE
+  # builds its own from a git submodule (0.2.2.dev17, confirmed by preflight.yaml).
+  # Without --no-deps, uv honours our pin and swaps the image's verifiers out from under
+  # prime-rl mid-setup. The image's build wins on the cluster, and the env runs on it
+  # unchanged.
+  VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env 2>&1 | tail -1
   VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env/environments/alien-api 2>&1 | tail -1
   # Fail cheaply here rather than 20 minutes into a run: env id resolves, fleet hydrates to
   # 240 episodes offline, and the pinned verifiers build is the one installed.

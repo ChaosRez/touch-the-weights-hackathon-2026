@@ -55,6 +55,15 @@ artifact_verbosity = 22000   # tool returns pad toward this; lower it to make ex
 
 [orchestrator.train.env.env.agent]
 max_turns = 20
+# SET THE HARNESS EXPLICITLY. Without this line the harness is resolved by
+# `default_harness_id("alien-api")`, which falls back to **"bash"** because the taskset
+# exports no Harness subclass. The bash harness is a code-executing coding agent
+# (EXECUTES_CODE=True) and is the wrong driver for a plain MCP tool-calling taskset —
+# it is also the harness named in the `HarnessError: harness 'bash' exited 1` failure.
+# `null` is the plain tool-calling harness (SUPPORTS_MCP=True, EXECUTES_CODE=False), and
+# it is what the fork's own MCP tool-calling example uses
+# (configs/basic/wiki-search/rl.toml).
+harness = { id = "null", runtime = { type = "subprocess" } }
 
 [orchestrator.train.env.pool]
 type = "static"
@@ -78,6 +87,14 @@ target_modules = ["q_proj", "k_proj", "v_proj", "o_proj"]
 lr = 1e-05
 
 [inference]
+
+# REQUIRED for tool calling on Qwen under vLLM. Without a parser, vLLM returns the model's
+# tool calls as ordinary assistant text: the harness sees no tool calls, the agent never
+# reads the world, and every rollout scores 0 with tool_calls=0 — which looks like "the
+# model is bad at the task" rather than a config error. The fork's own MCP tool-calling
+# example (configs/basic/wiki-search/rl.toml, Qwen3-4B) sets exactly this.
+[inference.model]
+tool_call_parser = "hermes"
 
 # 2 inference GPUs as two independent 8B replicas (tp=1, dp=2). 8B fits on one H100.
 [inference.parallel]
