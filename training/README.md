@@ -51,13 +51,23 @@ no env configured — set env = { taskset = { id = "<id>" } } (v1) or id = "<id>
    Should print `AlienApiTaskset`. If it raises, the hub wrapper in
    `environments/alien-api/` is not installed: `uv pip install --no-deps -e environments/alien-api`.
 
-2. **On a dev box, before any training.** Launch one GPU with the training image, no
-   `run:` block, ssh in, and run the preflight from `run.yaml`'s `setup:` by hand. This
-   catches the two things most likely to be wrong: the image's bundled `verifiers` build
-   differing from the pin here, and the env failing to import into `/app/.venv`.
+2. **A preflight job, before any training.** Not a dev box: submit `run.yaml` with the
+   `run:` block replaced by `echo preflight only`. The `setup:` block already installs the
+   env and asserts the id resolves, the fleet hydrates to 240 episodes, and the image's
+   `verifiers` build matches the pin. It costs one node for under a minute and catches the
+   two things most likely to be wrong.
+
+   ```bash
+   sky jobs launch -y -n alien-preflight run.yaml
+   sky jobs logs alien-preflight
+   ```
 
 3. **Two steps, then stop.** `max_steps = 2`, watch that rollouts complete and rewards are
    not all zero, then set it back.
+
+Do not reach for an interactive box for any of this. `sky launch -c` holds its GPUs until
+someone tears it down, and with every team on one pool that is capacity taken out of the
+room for as long as you leave it up. Iterate by resubmitting jobs.
 
 ## Sizing
 

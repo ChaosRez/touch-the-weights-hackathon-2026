@@ -1,9 +1,15 @@
 # alien-api RL on the cluster, single node, 8x H100.
 #
 # Launch from THIS directory (the file_mounts sources are relative to it):
-#   sky launch -c alien-rl -y --down run.yaml
-# Unattended:
+#
 #   sky jobs launch -y -n alien-rl run.yaml
+#
+# `sky jobs launch`, NOT `sky launch -c`. A named cluster holds its GPUs until someone
+# runs `sky down`; a managed job releases them when it finishes. With every team sharing
+# one pool, an idle cluster is 8 H100s nobody else can use.
+#
+# SINGLE NODE. Do not add `num_nodes`. Multi-node jobs are admitted all-or-nothing, so
+# they block the queue waiting for a second whole node while running nothing.
 name: alien-api-rl
 
 resources:

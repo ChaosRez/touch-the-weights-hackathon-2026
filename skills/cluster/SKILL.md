@@ -12,6 +12,35 @@ identity per person or agent, everything visible in one dashboard.
 > `SKYPILOT_API_SERVER_ENDPOINT`, your team's queue name, and the training image digest.
 > Fill them in below before running anything.
 
+## Two hard rules
+
+The GPUs are shared across every team for the whole event. Both of these are about not
+taking capacity away from the room.
+
+**1. Submit jobs. Do not create clusters.**
+
+Use `sky jobs launch`. Do not use `sky launch -c <name>`.
+
+`sky launch -c <name>` creates a **persistent cluster** that holds its GPUs from the moment
+it starts until someone runs `sky down`. It keeps holding them while you read logs, while
+you think, while you are at lunch, and overnight. A managed job with `sky jobs launch`
+takes GPUs when it runs and gives them back when it finishes.
+
+One idle dev cluster can park 8 H100s for a day. There are not enough GPUs for that to
+happen more than once.
+
+**2. Single node only. No multi-node runs.**
+
+Every task file stays at one node. Do not set `num_nodes`, do not launch anything that
+spans hosts.
+
+Multi-node jobs are admitted all-or-nothing, so they sit holding nothing until an entire
+second node frees up, and then take both at once. During an event with many small jobs
+that means one team blocks the queue for everyone while getting nothing done itself. The
+training config that ships with this repo is single node, 8x H100, on purpose.
+
+If you genuinely believe you need more than one node, talk to an organizer first.
+
 ## Setup, once
 
 1. Install Tailscale and join the tailnet with the account the organizers tell you to use.
@@ -26,35 +55,39 @@ Agents use a service-account token in the same variable, owned by a human.
 
 ## Recipes
 
-**Dev box, for debugging.** Holds its GPU until you release it, so always autostop.
-
-```bash
-sky launch -c dev --gpus H100-80GB:1 -i 30   # -i 30 = autostop after 30 idle minutes
-ssh dev
-sky down dev
-```
-
-**Batch job.**
+**Everything is a managed job.** One shape, single node:
 
 ```yaml
 # task.yaml
 name: myjob
 resources:
   infra: kubernetes
-  accelerators: H100-80GB:1
+  accelerators: H100-80GB:1     # ask for what you need, not the whole node
 run: |
   python my_script.py
 ```
 
 ```bash
-sky launch -c myjob -y --down task.yaml    # --down = tear down when finished
-sky logs myjob
+sky jobs launch -y -n myjob task.yaml
+sky jobs queue                   # your jobs and their state
+sky jobs logs myjob              # or --no-follow for a snapshot
+sky jobs cancel myjob
 ```
 
-**Multi-node.** Set `num_nodes: N`. That is the whole recipe. Pods are admitted
-all-or-nothing as one workload, and the API server attaches the queue labels itself. Do
-not hand-write PodGroups, scheduler names, or queue labels. SkyPilot injects
-`SKYPILOT_NODE_RANK`, `SKYPILOT_NODE_IPS`, `SKYPILOT_NUM_NODES` for torchrun.
+**Iterating on code.** The instinct is to grab an interactive box. Do not. Put your
+debugging in the `run:` block and resubmit: a job that starts, prints, and exits takes
+seconds of GPU time instead of parking a node while you edit. `workdir:` syncs your local
+directory each launch, so the edit-resubmit loop is fast.
+
+```yaml
+workdir: .
+run: |
+  python -c "import torch; print(torch.cuda.device_count())"
+```
+
+**Short probes are cheap and encouraged.** Verifying an import, a checkpoint path, or a
+config takes a one-CPU or one-GPU job of a few seconds. Do that before submitting anything
+long, every time.
 
 **RL training on this environment.** See [`../../training/README.md`](../../training/README.md).
 
@@ -63,8 +96,9 @@ not hand-write PodGroups, scheduler names, or queue labels. SkyPilot injects
 - **`priorityClassName: train` in `pod_config`.** Without it your pods sit at priority 0
   and get preempted by anything else in the queue, including a one-GPU probe. This has
   killed a running 16-GPU job.
-- **Always `--down` or `-i <minutes>`.** Never leave a cluster holding GPUs with no
-  autostop. This matters more than usual with several teams sharing quota.
+- **No `sky launch -c`, no `num_nodes`.** See the two hard rules above. If you already
+  created a cluster, `sky status` will show it and `sky down <name>` releases it. Do that
+  now rather than at the end of the day.
 - **`/mnt/nvme` is node-local.** A dataset or config staged on one node does not exist on
   another. Ship files with `file_mounts`, not by assuming a shared path.
 - **Unique `output_dir` per job.** Two jobs writing one output dir kills one of them at
@@ -73,12 +107,15 @@ not hand-write PodGroups, scheduler names, or queue labels. SkyPilot injects
 ## Checking on things, non-interactively
 
 ```bash
-sky api info                 # connectivity
-sky gpus list                # capacity
-sky queue --all              # what is running
-sky logs <cluster> --no-follow
-sky jobs queue               # managed jobs
+sky api info                    # connectivity
+sky gpus list                   # capacity
+sky jobs queue                  # your jobs
+sky jobs logs <name> --no-follow
+sky status                      # clusters YOU are holding — should be empty
 ```
+
+`sky status` should show nothing. If it lists a cluster, you are holding GPUs the rest of
+the room cannot use: `sky down <name>`.
 
 If your job is Pending, you are over your queue's quota and it will start when capacity
 frees. Do not retry-loop on Pending.
@@ -95,9 +132,10 @@ frees. Do not retry-loop on Pending.
 | Managed job FAILED but a pod still runs | `sky jobs cancel` the job. Deleting the pod directly gets it resurrected by the controller. |
 | Multiple vLLM servers on one node crash | Give each its own `--server.port`, `--data-parallel-rpc-port`, and `VLLM_PORT`, and stagger boots. |
 
-## Unattended runs
+## Long runs
 
-Submit with `sky jobs launch` and set both of these, or recovery will not work:
+Everything here is a managed job already, but a run long enough to leave alone needs
+recovery configured, or it will not survive a preemption:
 
 ```yaml
 resources:

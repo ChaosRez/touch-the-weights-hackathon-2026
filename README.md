@@ -170,6 +170,20 @@ skills/                agent-readable guides for this env and for the cluster
 reports/               the measured outer-loop result
 ```
 
+## If you use the GPU cluster
+
+Two rules, because every team shares one pool of GPUs:
+
+- **Submit jobs, do not create clusters.** `sky jobs launch`, never `sky launch -c <name>`.
+  A named cluster holds its GPUs until someone runs `sky down`, including while you read
+  logs, edit code, or sleep. A managed job gives them back when it finishes. Check with
+  `sky status`, which should show nothing.
+- **Single node.** Do not set `num_nodes`. Multi-node jobs are admitted all-or-nothing, so
+  they block the queue waiting for a whole second node while running nothing.
+
+Nothing in this repo needs either. The training config is single node, and everything else
+runs on your laptop. Details in [`skills/cluster/SKILL.md`](skills/cluster/SKILL.md).
+
 ## Pointers
 
 - Writing an agent against this env: [`skills/alien-api-env/SKILL.md`](skills/alien-api-env/SKILL.md)
