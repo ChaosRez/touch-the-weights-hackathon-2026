@@ -58,9 +58,32 @@ became fatal the day mcp 2.0.0 shipped; nothing in prime-rl or this env changed.
 changes. The reverse fix is impossible: verifiers imports `mcp.server.fastmcp`, which
 2.0.0 removed. Full detail in [`RUNLOG.md`](RUNLOG.md).
 
-**Read `Reward` in a smoke with care.** With `group_size = 2` and the enforced
-`zero_advantage` filter, only groups containing both a 1.0 and a 0.0 survive, so the mean
-is exactly 0.5 by construction. It is not a performance measurement.
+### Reading the step line
+
+```
+SUCCESS Step 2 | 22.6s | Reward 0.5000 | Trainable 2/20 | Turns 2.0 | Error 20.0% | Truncation 0.0%
+```
+
+Two of those numbers mislead at smoke scale, both diagnosed in [`RUNLOG.md`](RUNLOG.md):
+
+- **`Reward 0.5000` is an artifact.** With `group_size = 2` and the enforced
+  `zero_advantage` filter, only groups holding both a 1.0 and a 0.0 survive, so the mean is
+  exactly 0.5 by construction. Not a performance measurement.
+- **`Error 20.0%` is benign.** The error type is `Cancelled`: the orchestrator kills
+  surplus in-flight rollouts when it drains the pipeline
+  (`Draining pipeline (cancelled N in-flight train rollout(s))`). Step 1 always shows 0%,
+  and a `step_N+1/` trace directory exists for a step that never ran. With `batch_size = 4`
+  the cancelled-to-shipped ratio is high; at 128 it is proportionally small.
+
+What *is* worth reacting to:
+
+- **`Truncation`** — 1024 completion tokens truncated 75% of step-1 generations, cutting
+  the agent off mid-tool-call. The smoke now uses 4096, `rl.toml` uses 8192.
+- **`stop_condition/context_length`** — with `artifact_verbosity = 22000` and
+  `seq_len = 32768` there is little headroom. If this climbs, lower `artifact_verbosity`
+  before raising `seq_len`.
+- **`solved_none`** sitting at 0.67-0.77 is expected cold. Only `solved_some` groups
+  survive the advantage filter and produce gradient.
 
 ## The one config trap
 

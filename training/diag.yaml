@@ -1,0 +1,168 @@
+# alien-api RL on the cluster — hackathon guest config, single node, <=4x H100.
+#
+# Launch from THIS directory (file_mounts sources are relative to it):
+#
+#   sky jobs launch -y -n alien-rl run.yaml
+#
+# `sky jobs launch`, NOT `sky launch -c`. A named cluster holds its GPUs until someone runs
+# `sky down`; a managed job releases them when it finishes. Every team shares one pool.
+#
+# SINGLE NODE. Do not add `num_nodes`.
+name: alien-api-diag
+
+resources:
+  infra: kubernetes
+  # 4 GPUs is the hackathon per-team cap. The rl.toml splits them 2 trainer + 2 inference.
+  # Asking for more is rejected by the namespace quota (your job stays Pending forever).
+  accelerators: H100-80GB:4
+  # The prepared hackathon image (public, anon-pull, no credential needed). It IS prime-rl.
+  # Pinned by digest — never :latest. Ask an organizer if the digest has been rotated.
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          # REQUIRED. The image runs as a non-root user (appuser); SkyPilot's pod runtime
+          # bootstraps ssh/ray as root. Without this every job dies in setup with
+          # "sudo: The 'no new privileges' flag is set". This is the one line guests forget.
+          - securityContext:
+              runAsUser: 0
+            volumeMounts:
+              - {name: scratch, mountPath: /scratch}   # writable workspace for caches + ckpts
+              - {name: shm, mountPath: /dev/shm}        # NCCL/vLLM want large shared memory
+        volumes:
+          # emptyDir, NOT hostPath. The hackathon namespace forbids hostPath (it is how you
+          # would reach the host's disks), so `/mnt/nvme` is unavailable to you — use this.
+          - {name: scratch, emptyDir: {sizeLimit: 200Gi}}
+          - {name: shm, emptyDir: {medium: Memory, sizeLimit: 64Gi}}
+
+file_mounts:
+  # The env travels with the job. Sources are relative to this dir.
+  /tmp/alien-api-env: ..
+  /tmp/cfg/rl.toml: ./smoke-rl.toml
+
+envs:
+  # All caches on the writable scratch volume (NOT /mnt/nvme, which you cannot mount).
+  HF_HOME: /scratch/hf
+  VLLM_CACHE_ROOT: /scratch/vllm
+  # W&B is offline by default (no key needed). Set an org-provided WANDB_API_KEY to go online.
+  WANDB_MODE: offline
+
+setup: |
+  set -eo pipefail
+  cd /app
+  # Install the env library + its hub wrapper into the image's venv. The wrapper makes the
+  # id "alien-api" resolvable; the library is what it re-exports.
+  # --no-deps ON BOTH. This repo pins verifiers==0.2.2.dev36 for laptop use; the IMAGE
+  # builds its own from a git submodule (0.2.2.dev17, confirmed by preflight.yaml).
+  # Without --no-deps, uv honours our pin and swaps the image's verifiers out from under
+  # prime-rl mid-setup. The image's build wins on the cluster, and the env runs on it
+  # unchanged.
+  VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env 2>&1 | tail -1
+  VIRTUAL_ENV=/app/.venv uv pip install -q --no-deps -e /tmp/alien-api-env/environments/alien-api 2>&1 | tail -1
+
+  # ---------------------------------------------------------------------------------
+  # WORKAROUND for an upstream verifiers bug. Remove once the fork pins this itself.
+  #
+  # Every rollout dies with `HarnessError: harness 'null' exited 1` and, underneath,
+  # `session.initialize()` cancelled, because the two sides of MCP run different MAJOR
+  # versions:
+  #
+  #   server side  (verifiers venv)      mcp 1.29.0
+  #   harness side (isolated uv script)  mcp 2.0.0
+  #
+  # The harness program is a PEP 723 script whose header declares an UNPINNED
+  # `dependencies = ["openai", "mcp", "httpx", "tenacity"]`, so `uv run --script` resolves
+  # whatever mcp is newest. Since mcp 2.0.0 shipped, that is a 2.x client talking to a 1.x
+  # server, and `initialize` never returns. This was latent and became fatal on the day
+  # mcp 2.0.0 was published — nothing in prime-rl or this env changed.
+  #
+  # Fixing it the other way (upgrading the server to mcp 2.x) is NOT possible: verifiers'
+  # server imports `mcp.server.fastmcp`, which 2.0.0 removed. Verified both directions
+  # locally with a two-process reproduction.
+  #
+  # Fails loudly if the header has changed shape, so a future image cannot silently skip
+  # the patch and reintroduce the hang.
+  /app/.venv/bin/python - <<'PY'
+  from pathlib import Path
+  import verifiers.v1.harnesses.null.harness as h
+  p = Path(h.__file__).parent / "program.py"
+  s = p.read_text()
+  old = '# dependencies = ["openai", "mcp", "httpx", "tenacity"]'
+  new = '# dependencies = ["openai", "mcp<2", "httpx", "tenacity"]'
+  if new in s:
+      print("mcp pin: already present", flush=True)
+  elif old in s:
+      p.write_text(s.replace(old, new))
+      print("mcp pin: patched ->", new, flush=True)
+  else:
+      raise SystemExit(
+          "PEP 723 header is not in the expected form; re-check the mcp pin workaround.\n"
+          + "\n".join(s.splitlines()[:6])
+      )
+  PY
+  # Fail cheaply here rather than 20 minutes into a run: env id resolves, fleet hydrates to
+  # 240 episodes offline, and the pinned verifiers build is the one installed.
+  /app/.venv/bin/python - <<'PY'
+  import verifiers
+  from verifiers.v1.loaders import taskset_class, taskset_config_type
+  from alien_api_env.vf import AlienApiTaskset, AlienApiTasksetConfig
+  print("verifiers:", verifiers.__version__, flush=True)
+  assert taskset_class("alien-api") is AlienApiTaskset
+  assert "split" in taskset_config_type("alien-api").model_fields
+  n = len(list(AlienApiTaskset(AlienApiTasksetConfig(split="")).load()))
+  assert n == 240, f"expected 240 episodes, got {n}"
+  print("preflight ok:", n, "episodes", flush=True)
+  PY
+
+run: |
+  set -x
+  cd /app
+  timeout 900 .venv/bin/rl @ /tmp/cfg/rl.toml || true
+
+  echo "==================== DIAGNOSTICS ===================="
+  echo "### metrics.jsonl: error-related scalars"
+  find /scratch -name 'metrics.jsonl' 2>/dev/null | while read -r f; do
+    echo "--- $f"
+    /app/.venv/bin/python - "$f" <<'PY2'
+  import json, sys
+  keys = {}
+  for line in open(sys.argv[1]):
+      try: d = json.loads(line)
+      except Exception: continue
+      for k, v in d.items():
+          if any(s in k.lower() for s in ("error", "truncat", "stop_cond", "solved", "is_completed")):
+              keys.setdefault(k, []).append(v)
+  for k in sorted(keys):
+      print(f"  {k} = {keys[k]}")
+  PY2
+  done
+
+  echo "### rollout traces: error types and stop conditions"
+  find /scratch -name '*.jsonl' ! -name 'metrics.jsonl' 2>/dev/null | while read -r f; do
+    echo "--- $f  ($(wc -l < "$f") rollouts)"
+    /app/.venv/bin/python - "$f" <<'PY2'
+  import json, sys, collections
+  types, stops, samples = collections.Counter(), collections.Counter(), []
+  for line in open(sys.argv[1]):
+      try: r = json.loads(line)
+      except Exception: continue
+      err = r.get("error") or {}
+      if isinstance(err, dict) and err.get("type"):
+          types[err["type"]] += 1
+          if len(samples) < 3:
+              samples.append(str(err)[:600])
+      if r.get("stop_condition"): stops[r["stop_condition"]] += 1
+  print("  error types:", dict(types))
+  print("  stop conditions:", dict(stops))
+  for s in samples: print("  SAMPLE ERROR:", s)
+  PY2
+  done
+
+  echo "### env server logs (where MCP/tool errors land)"
+  find /scratch -path '*logs*' -name '*.log' 2>/dev/null | while read -r f; do
+    echo "--- $f"; tail -120 "$f"
+  done
+  echo "==================== END DIAGNOSTICS ===================="

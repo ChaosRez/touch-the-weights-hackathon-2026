@@ -51,7 +51,10 @@ alpha = 64.0
 
 [orchestrator.train.sampling]
 temperature = 1.0
-max_completion_tokens = 1024
+# 1024 was too tight: it truncated 75% of generations on step 1 (job 122/123), which makes
+# a smoke unrepresentative — the agent gets cut off mid-tool-call rather than exercising the
+# loop. 4096 keeps the smoke fast while letting rollouts actually finish. rl.toml uses 8192.
+max_completion_tokens = 4096
 
 # --- the environment (v1 shape) ------------------------------------------------------
 [[orchestrator.train.env]]
@@ -125,3 +128,7 @@ offline = true
 [trainer.wandb]
 project = "alien-api-hackathon"
 offline = true
+
+# Local JSONL metric sink -> <output_dir>/metrics.jsonl. Enabled so error_types() and the
+# per-step scalars are readable without W&B.
+[file_monitor]

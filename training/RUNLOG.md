@@ -309,8 +309,7 @@ windowed trend in `preference_accepted` / `value_correct` / `tool_calls`, not `R
 
 ### Other things worth noting from this run
 
-- `Error 20.0%` on step 2: a fifth of rollouts still error, down from 100%. Not fatal and
-  not yet diagnosed. Worth a look before a long run.
+- `Error 20.0%` on step 2: diagnosed in job 123 below. It is benign.
 - `empty train batch (0 of N generated rollouts shipped — all errored or filtered out)`
   appears repeatedly and is mostly the zero-advantage filter doing its job on a model that
   scores 0 on most episodes. It is only alarming if it persists — the orchestrator gives up
@@ -326,3 +325,77 @@ cancelled", which cannot say why.
 
 `debug.yaml` runs the smoke under `timeout 900` and then dumps every `*.log` under
 `/scratch`, which is where the answer should be.
+
+## Job 123 — SUCCEEDED. Diagnosed the 20% "errors". They are benign.
+
+`diag.yaml`: the passing smoke plus `[file_monitor]` (writes `<output_dir>/metrics.jsonl`)
+and a run block that dumps the metrics, the saved rollout traces, and the env server logs.
+Added because the error rate is a *metric*, not a log line — nothing in the job output says
+what errored.
+
+### The answer: `Cancelled`
+
+```
+train/agg/all/error/Cancelled = [5.0]
+train/agg/all/has_error/mean  = [0.0, 0.192]     # step 1, step 2
+train/agg/all/stop_condition/error = [0.192]
+```
+
+and, in the job log:
+
+```
+INFO Draining pipeline (cancelled 4 in-flight train rollout(s); any in-flight evals will complete)
+```
+
+The orchestrator cancels surplus in-flight rollouts when it no longer needs them —
+`cancel_inflight_train_rollouts()` in `orchestrator.py`. Those land as
+`stop_condition="error"` with error type `Cancelled`. Three pieces of evidence that this is
+all it is:
+
+- **Step 1 has 0% errors.** Errors only appear once the pipeline is buffering ahead.
+- **A `step_3/` trace directory exists** even though `max_steps = 2`: 7 rollouts, 4 of them
+  errors. Those are rollouts speculatively started for a step that never ran, killed at
+  shutdown.
+- The drain message accounts for them exactly.
+
+**So the error rate is an artifact of running a 2-step job with tiny batches.** With
+`batch_size = 4` the ratio of speculative-and-then-cancelled rollouts to shipped ones is
+high. At `batch_size = 128` it is proportionally much smaller. Nothing to fix.
+
+### The real finding: truncation, and it was my own config
+
+Per-step stop conditions from the saved traces:
+
+| step | rollouts | agent_completed | max_turns | context_length | error (Cancelled) |
+|---|---|---|---|---|---|
+| 1 | 12 | 7 | 4 | 1 | 0 |
+| 2 | 27 | 15 | 7 | 0 | 5 |
+| 3 (never ran) | 7 | 3 | 0 | 0 | 4 |
+
+```
+train/agg/all/is_truncated/mean = [0.75, 0.308]
+```
+
+**75% of step-1 generations were truncated.** That was `max_completion_tokens = 1024`,
+which I set when building `smoke-rl.toml` to make the smoke fast. It cuts the agent off
+mid-tool-call and makes the smoke unrepresentative. Raised to **4096** (`rl.toml` uses
+8192).
+
+Also worth watching on real runs: one rollout hit `context_length`. With
+`artifact_verbosity = 22000` and `seq_len = 32768`, a few padded tool returns leave little
+room. If `context_length` climbs, lower `artifact_verbosity` before raising `seq_len`.
+
+`max_turns` fired on 26-33% of rollouts. With an episode budget of 3-5 tool calls, an agent
+burning 20 turns is flailing, which is the expected cold-model behaviour on this
+environment, not a config fault.
+
+### Solve rates, for calibration
+
+```
+solved_none = [0.67, 0.77]    solved_some = [0.17, 0.15]    solved_all = [0.17, 0.08]
+```
+
+Two thirds to three quarters of groups score all-zero. Only the `solved_some` groups
+survive the enforced `zero_advantage` filter and produce gradient, which is why the shipped
+batches are small and why `Reward` reads 0.5000. Qwen3-8B does solve some episodes cold,
+which is consistent with the prior-aligned dimensions being reachable without memory.
