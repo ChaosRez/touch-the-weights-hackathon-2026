@@ -251,6 +251,15 @@ Required test:
 - Frozen base-model parameters receive no gradients.
 - Outputs and loss stay finite.
 
+Status: **completed and revalidated on 2026-08-01.** The inference-only `recompact`
+method remains under `@torch.no_grad()`, while `recompact_train` captures new raw K/V with
+the frozen base under `no_grad`, optionally detaches prior compact K/V, concatenates prior and
+new states per layer, and runs only the Perceiver differentiably. Depth-1 training uses
+`compress`; deeper rows construct on-policy recurrence states without a retained history graph
+and differentiate only the final recompact step. Focused tests cover ten fixed-64 recurrences,
+finite K/V/bias/logits/loss, gradients on every Perceiver parameter, no base-model gradients,
+and explicit prior-state detachment. This path produced both Phase 2 checkpoints in job 49.
+
 ## Phase 2 — train the two comparison checkpoints
 
 Add:
