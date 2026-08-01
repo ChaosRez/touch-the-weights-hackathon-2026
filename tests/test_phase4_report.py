@@ -58,11 +58,12 @@ def test_load_arms_refuses_unpaired_results(tmp_path):
     specifications = []
     for arm in ("cold", "text64", "still_single", "still_recurrent"):
         path = tmp_path / f"{arm}.json"
-        records = [_record(0, 0.0, 1.0)]
-        records[0]["feedback"] = "Accepted."
-        records[0]["tool_executions"] = []
+        records = [_record(index, 0.0, 1.0) for index in range(2)]
+        for record in records:
+            record["feedback"] = "Accepted."
+            record["tool_executions"] = []
         if arm == "text64":
-            records[0]["episodeId"] = "different"
+            records[1]["episodeId"] = "different"
         path.write_text(
             json.dumps(
                 {
@@ -79,3 +80,6 @@ def test_load_arms_refuses_unpaired_results(tmp_path):
 
     with pytest.raises(ValueError, match="not paired"):
         load_arms(specifications)
+
+    paired_prefix = load_arms(specifications, prefix=1)
+    assert all(len(result["records"]) == 1 for result in paired_prefix.values())

@@ -116,7 +116,9 @@ def teach_retest(
     return groups
 
 
-def load_arms(specifications: list[str]) -> dict[str, dict[str, Any]]:
+def load_arms(
+    specifications: list[str], *, prefix: int | None = None
+) -> dict[str, dict[str, Any]]:
     paths: dict[str, Path] = {}
     for specification in specifications:
         if "=" not in specification:
@@ -145,6 +147,10 @@ def load_arms(specifications: list[str]) -> dict[str, dict[str, Any]]:
                     expected_hashes.add(sha256(event.encode()).hexdigest())
         if result.get("event_hashes") != sorted(expected_hashes):
             raise ValueError(f"{arm} legal-event hash audit failed")
+        if prefix is not None:
+            if prefix < 1 or len(records) < prefix:
+                raise ValueError(f"{arm} does not contain requested paired prefix {prefix}")
+            data[arm] = {**result, "records": records[:prefix]}
     lengths = {len(result["records"]) for result in data.values()}
     models = {result["model"] for result in data.values()}
     seeds = {result["seed"] for result in data.values()}
@@ -517,13 +523,14 @@ def main() -> int:
     )
     parser.add_argument("--out", required=True)
     parser.add_argument("--window", type=int, default=40)
+    parser.add_argument("--prefix", type=int, help="compare this common completed prefix")
     parser.add_argument("--bootstrap-samples", type=int, default=10_000)
     parser.add_argument("--bootstrap-seed", type=int, default=49017)
     parser.add_argument("--phase3-oldest-fact-plot")
     args = parser.parse_args()
     if args.window < 1 or args.bootstrap_samples < 1:
         raise ValueError("window and bootstrap samples must be positive")
-    data = load_arms(args.arm)
+    data = load_arms(args.arm, prefix=args.prefix)
     episode_ids = {record["episodeId"] for record in data["cold"]["records"]}
     metadata = load_fleet(Path(args.fleet), episode_ids)
     metrics = aggregate(
