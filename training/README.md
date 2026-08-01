@@ -56,7 +56,7 @@ became fatal the day mcp 2.0.0 shipped; nothing in prime-rl or this env changed.
 
 `run.yaml` patches the header to `mcp<2` during setup and fails loudly if the header shape
 changes. The reverse fix is impossible: verifiers imports `mcp.server.fastmcp`, which
-2.0.0 removed. Full detail in [`RUNLOG.md`](RUNLOG.md).
+2.0.0 removed.
 
 ### Reading the step line
 
@@ -64,7 +64,7 @@ changes. The reverse fix is impossible: verifiers imports `mcp.server.fastmcp`, 
 SUCCESS Step 2 | 22.6s | Reward 0.5000 | Trainable 2/20 | Turns 2.0 | Error 20.0% | Truncation 0.0%
 ```
 
-Two of those numbers mislead at smoke scale, both diagnosed in [`RUNLOG.md`](RUNLOG.md):
+Two of those numbers mislead at small batch sizes:
 
 - **`Reward 0.5000` is an artifact.** With `group_size = 2` and the enforced
   `zero_advantage` filter, only groups holding both a 1.0 and a 0.0 survive, so the mean is
@@ -135,19 +135,49 @@ no env configured — set env = { taskset = { id = "<id>" } } (v1) or id = "<id>
    why both installs use `--no-deps` — letting uv apply our pin would swap the image's
    verifiers out from under prime-rl mid-setup.
 
-3. **The two-step smoke.** `smoke.yaml` + `smoke-rl.toml`: the same config with every
-   concurrency knob at the floor and `max_steps = 2`. This is the run that is verified
-   (job 122).
+3. **A two-step smoke**, before committing to a long run. Override the step count on the
+   command line rather than editing `rl.toml`:
 
    ```bash
-   sky jobs launch -y -n alien-smoke smoke.yaml
+   # in run.yaml's run block, append --max-steps 2 to the `rl` invocation
+   sky jobs launch -y -n alien-smoke run.yaml
    ```
 
    Success looks like `SUCCESS Step 1 ... SUCCESS Step 2 ... Orchestrator finished.` with
-   **zero** `HarnessError` lines. Takes about 6 minutes, most of it model download and
-   vLLM startup.
+   **zero** `HarnessError` lines. Budget ~6 minutes, most of it model download and vLLM
+   startup.
+
+   Caveat worth knowing: the run that verified this path end to end (2026-08-01) also
+   lowered every concurrency knob to the floor (`batch_size 4`, `group_size 2`,
+   `max_inflight_rollouts 4`, `pool.num_workers 2`). `rl.toml` at `batch_size = 128` has
+   **not** been re-verified since the mcp fix landed. If a full-scale run misbehaves, drop
+   those four values first — that configuration is known good.
 
 4. **Then the real run**, `run.yaml` + `rl.toml`.
+
+## Debugging a run that fails or stalls
+
+Three places hold the answer and **none of them reach the job log**. If you need them, add
+this to your `run:` block after the `rl` invocation:
+
+```bash
+timeout 900 .venv/bin/rl @ /tmp/cfg/rl.toml || true   # bound it: a failing run retries forever
+
+find /scratch -name 'metrics.jsonl' -exec tail -5 {} \;        # every scalar, incl. error types
+find /scratch -name 'traces.jsonl' | head                       # per-step rollout traces
+find /scratch -path '*logs/envs*' -name '*.log' -exec tail -100 {} \;   # env server + MCP errors
+```
+
+- **`metrics.jsonl`** only exists if you enable the sink: add a bare `[file_monitor]` table
+  to `rl.toml`. Without it these scalars are computed and thrown away, because W&B is
+  offline by default.
+- **`logs/envs/{train,eval}/<name>.log`** is where prime-rl redirects each env server's
+  stdout and stderr. The MCP servers are launched from inside that process, so MCP startup
+  failures land there and nowhere else — upstream you only see the client saying
+  `initialize` was cancelled, which cannot tell you why.
+- A **stalled** job is indistinguishable from a healthy one in `sky jobs queue`: status
+  stays `RUNNING`, duration climbs, the log just stops. Poll the last log *timestamp*, not
+  the status.
 
 Do not reach for an interactive box for any of this. `sky launch -c` holds its GPUs until
 someone tears it down, and with every team on one pool that is capacity taken out of the
