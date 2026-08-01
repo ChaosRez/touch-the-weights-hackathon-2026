@@ -137,6 +137,62 @@ class QwenGenerationConfig:
     enable_thinking: bool = True
 
 
+def render_qwen_chat(
+    tokenizer: Any,
+    config: QwenGenerationConfig,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+) -> Any:
+    """Render the one shared live chat request for cold, text, and Still backends."""
+
+    return tokenizer.apply_chat_template(
+        messages,
+        tools=tools,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
+        enable_thinking=config.enable_thinking,
+    )
+
+
+def qwen_generation_kwargs(tokenizer: Any, config: QwenGenerationConfig) -> dict[str, Any]:
+    """Return identical generation controls for every Qwen Phase 4 arm."""
+
+    generation: dict[str, Any] = {
+        "max_new_tokens": config.max_new_tokens,
+        "do_sample": config.do_sample,
+        "pad_token_id": tokenizer.eos_token_id,
+    }
+    if config.do_sample:
+        generation.update(
+            temperature=config.temperature,
+            top_p=config.top_p,
+            top_k=config.top_k,
+        )
+    return generation
+
+
+def _input_ids(encoded: Any, device: str) -> tuple[dict[str, Any], Any]:
+    if hasattr(encoded, "input_ids"):
+        model_inputs = {
+            name: tensor.to(device)
+            for name, tensor in encoded.items()
+            if hasattr(tensor, "to")
+        }
+        return model_inputs, model_inputs["input_ids"]
+    input_ids = encoded.to(device)
+    return {"input_ids": input_ids}, input_ids
+
+
+def _validate_context(model_config: Any, input_tokens: int, memory_tokens: int, maximum: int) -> None:
+    context_limit = getattr(model_config, "max_position_embeddings", None)
+    if context_limit and input_tokens + memory_tokens + maximum > context_limit:
+        raise ValueError(
+            f"live prompt ({input_tokens}) + memory ({memory_tokens}) + generation ({maximum}) "
+            f"exceeds context window {context_limit}"
+        )
+
+
 class HuggingFaceQwenBackend:
     """Single-device Hugging Face generation, loaded lazily to keep local tests light."""
 
@@ -191,48 +247,148 @@ class HuggingFaceQwenBackend:
     ) -> GeneratedTurn:
         torch = self._torch
         rendered_messages = self._attach_text(messages, attachment)
-        encoded = self.tokenizer.apply_chat_template(
-            rendered_messages,
-            tools=tools,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            enable_thinking=self.config.enable_thinking,
+        encoded = render_qwen_chat(self.tokenizer, self.config, rendered_messages, tools)
+        model_inputs, input_ids = _input_ids(encoded, self.config.device)
+        _validate_context(
+            self.model.config,
+            int(input_ids.shape[-1]),
+            0,
+            self.config.max_new_tokens,
         )
-        if hasattr(encoded, "input_ids"):
-            model_inputs = {
-                name: tensor.to(self.config.device)
-                for name, tensor in encoded.items()
-                if hasattr(tensor, "to")
-            }
-            input_ids = model_inputs["input_ids"]
-        else:
-            input_ids = encoded.to(self.config.device)
-            model_inputs = {"input_ids": input_ids}
-        context_limit = getattr(self.model.config, "max_position_embeddings", None)
-        if context_limit and input_ids.shape[-1] + self.config.max_new_tokens > context_limit:
-            raise ValueError(
-                f"prompt ({input_ids.shape[-1]}) + generation ({self.config.max_new_tokens}) "
-                f"exceeds context window {context_limit}"
-            )
 
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-        generation: dict[str, Any] = {
-            "max_new_tokens": self.config.max_new_tokens,
-            "do_sample": self.config.do_sample,
-            "pad_token_id": self.tokenizer.eos_token_id,
-        }
-        if self.config.do_sample:
-            generation.update(
-                temperature=self.config.temperature,
-                top_p=self.config.top_p,
-                top_k=self.config.top_k,
-            )
+        generation = qwen_generation_kwargs(self.tokenizer, self.config)
         with torch.inference_mode():
             output = self.model.generate(**model_inputs, **generation)
         new_ids = output[0, input_ids.shape[-1] :].tolist()
+        text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
+        return GeneratedTurn(
+            text=text,
+            token_ids=tuple(int(token) for token in new_ids),
+            input_tokens=int(input_ids.shape[-1]),
+            output_tokens=len(new_ids),
+        )
+
+    async def generate(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        attachment: MemoryAttachment | None,
+        seed: int,
+    ) -> GeneratedTurn:
+        return await asyncio.to_thread(self._generate_sync, messages, tools, attachment, seed)
+
+
+class StillQwenBackend:
+    """In-process Qwen generation against an optional trained fixed-size Still cache."""
+
+    def __init__(
+        self,
+        config: QwenGenerationConfig,
+        checkpoint_path: str,
+        still_config: Any | None = None,
+    ) -> None:
+        try:
+            import torch
+            from still.config import STILLConfig
+            from still.model.wrapper import STILLModel
+            from transformers import AutoTokenizer
+        except ImportError as error:  # pragma: no cover - exercised on the GPU image
+            raise RuntimeError("StillQwenBackend requires torch, transformers, and still") from error
+
+        self.config = config
+        self._torch = torch
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model_name)
+        cfg = still_config or STILLConfig(
+            model_name=config.model_name,
+            num_latents=64,
+            latent_dim=256,
+            num_blocks=2,
+            device=config.device,
+        )
+        if cfg.model_name != config.model_name:
+            raise ValueError("Still and Qwen model names must match")
+        self.still_model = STILLModel(
+            config.model_name,
+            cfg=cfg,
+            device=config.device,
+            dtype=getattr(torch, config.dtype),
+            attn_implementation="sdpa",
+        )
+        payload = torch.load(
+            checkpoint_path,
+            map_location=self.still_model.perceiver_device,
+            weights_only=True,
+        )
+        if not isinstance(payload, dict) or "perceiver" not in payload:
+            raise ValueError("Phase 4 requires a nested Phase 2 checkpoint")
+        recorded_model = payload.get("model_name") or payload.get("config", {}).get("model_name")
+        if recorded_model != config.model_name:
+            raise ValueError(
+                f"checkpoint model {recorded_model!r} does not match {config.model_name!r}"
+            )
+        recorded = payload.get("config", {})
+        expected = {
+            "num_latents": cfg.num_latents,
+            "latent_dim": cfg.latent_dim,
+            "num_blocks": cfg.num_blocks,
+        }
+        mismatches = {
+            key: (recorded.get(key), value)
+            for key, value in expected.items()
+            if recorded.get(key) != value
+        }
+        if mismatches:
+            raise ValueError(f"checkpoint Still configuration mismatch: {mismatches}")
+        self.still_model.perceiver.load_state_dict(payload["perceiver"])
+        self.still_model.perceiver.eval()
+        self.checkpoint_metadata = {
+            "path": checkpoint_path,
+            "format": payload.get("format"),
+            "stage": payload.get("stage"),
+            "completed_steps": payload.get("completed_steps"),
+        }
+
+    def _generate_sync(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        attachment: MemoryAttachment | None,
+        seed: int,
+    ) -> GeneratedTurn:
+        if attachment is not None and not isinstance(attachment, CompactKVAttachment):
+            raise UnsupportedAttachmentError(type(attachment).__name__)
+        cache = attachment.cache if attachment is not None else None
+        memory_positions = attachment.latent_count if attachment is not None else 0
+        if attachment is not None:
+            if memory_positions != self.still_model.cfg.num_latents:
+                raise ValueError("compact attachment latent count does not match Still config")
+            if int(cache.num_latents) != memory_positions:
+                raise ValueError("compact attachment metadata does not match its cache")
+
+        encoded = render_qwen_chat(self.tokenizer, self.config, messages, tools)
+        model_inputs, input_ids = _input_ids(encoded, self.config.device)
+        _validate_context(
+            self.still_model.base.config,
+            int(input_ids.shape[-1]),
+            memory_positions,
+            self.config.max_new_tokens,
+        )
+        torch = self._torch
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+        generation = qwen_generation_kwargs(self.tokenizer, self.config)
+        if "attention_mask" in model_inputs:
+            generation["attention_mask"] = model_inputs["attention_mask"]
+        with torch.inference_mode():
+            new_ids = self.still_model.decode_generate(
+                input_ids,
+                cache,
+                **generation,
+            )
         text = self.tokenizer.decode(new_ids, skip_special_tokens=True)
         return GeneratedTurn(
             text=text,

@@ -24,6 +24,7 @@ dependencies = [
 # The example outer loops (OpenAI Responses API driver).
 examples = ["openai>=1.0"]
 dev = ["pytest>=7", "pytest-asyncio>=0.23", "ruff>=0.4", "huggingface_hub>=0.20"]
+phase4 = ["torch>=2.4.0", "matplotlib>=3.9.0"]
 
 # No console scripts on purpose: the examples are meant to be READ and forked, so they
 # stay plain scripts under examples/ (`uv run python examples/scratchpad_loop.py`).

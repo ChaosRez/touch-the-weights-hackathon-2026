@@ -1,0 +1,62 @@
+# Run one Phase 4 arm on one GPU in the existing team box.
+# Override PHASE4_ARM, PHASE4_N, PHASE4_RUN_ID, and PHASE4_RESUME with `sky exec -e`.
+
+name: cartridges-phase-4-arm
+workdir: ../..
+
+resources:
+  infra: kubernetes
+  accelerators: H100-80GB:1
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
+
+envs:
+  HF_HOME: /persist/hf
+  HF_HUB_CACHE: /persist/hf/hub
+  PHASE4_ARM: cold
+  PHASE4_N: "3"
+  PHASE4_RUN_ID: qwen3_4b_seed17_v1
+  PHASE4_RESUME: "false"
+  PHASE4_REQUIRE_GATES: "true"
+  PHASE4_MODEL: Qwen/Qwen3-4B
+  PHASE4_SEED: "17"
+  PHASE4_SINGLE_CHECKPOINT: /persist/cartridges/checkpoints/qwen3_4b_single_step.pt
+  PHASE4_RECURRENT_CHECKPOINT: /persist/cartridges/checkpoints/qwen3_4b_recurrent.pt
+  TOKENIZERS_PARALLELISM: "false"
+
+run: |
+  set -euo pipefail
+  CARTRIDGES_WORKDIR="$PWD"
+  CARTRIDGES_PYTHON=/app/.venv/bin/python
+  test -d "$CARTRIDGES_WORKDIR/hackathon"
+  test -d "$CARTRIDGES_WORKDIR/still"
+  test -f "$PHASE4_SINGLE_CHECKPOINT"
+  test -f "$PHASE4_RECURRENT_CHECKPOINT"
+
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/still"
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/hackathon"
+  mkdir -p /persist/cartridges/phase4 /persist/cartridges/runs
+
+  CARTRIDGES_GPU_ID="${CUDA_VISIBLE_DEVICES%%,*}"
+  test -n "$CARTRIDGES_GPU_ID"
+  export CUDA_VISIBLE_DEVICES="$CARTRIDGES_GPU_ID"
+
+  PHASE4_EXTRA_ARGS=()
+  if [[ "$PHASE4_RESUME" == "true" ]]; then
+    PHASE4_EXTRA_ARGS+=(--resume)
+  fi
+  if [[ "$PHASE4_REQUIRE_GATES" == "true" ]]; then
+    PHASE4_EXTRA_ARGS+=(--require-smoke-gates)
+  fi
+
+  cd "$CARTRIDGES_WORKDIR/hackathon"
+  "$CARTRIDGES_PYTHON" examples/phase4_loop.py \
+    --arm "$PHASE4_ARM" \
+    --n "$PHASE4_N" \
+    --seed "$PHASE4_SEED" \
+    --model "$PHASE4_MODEL" \
+    --device cuda:0 \
+    --state-root "/persist/cartridges/phase4/${PHASE4_RUN_ID}/${PHASE4_ARM}" \
+    --single-checkpoint "$PHASE4_SINGLE_CHECKPOINT" \
+    --recurrent-checkpoint "$PHASE4_RECURRENT_CHECKPOINT" \
+    "${PHASE4_EXTRA_ARGS[@]}" \
+    | tee "/persist/cartridges/runs/phase4_${PHASE4_RUN_ID}_${PHASE4_ARM}_${PHASE4_N}.log"

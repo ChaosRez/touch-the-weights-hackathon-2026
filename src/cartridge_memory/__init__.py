@@ -12,7 +12,7 @@ from cartridge_memory.models import (
     RolloutRecord,
     TextAttachment,
 )
-from cartridge_memory.qwen_agent import QwenAgentConfig, QwenToolAgent
+from cartridge_memory.qwen_agent import QwenAgentConfig, QwenToolAgent, StillQwenBackend
 
 __all__ = [
     "CompactKVAttachment",
@@ -21,5 +21,6 @@ __all__ = [
     "QwenToolAgent",
     "RawKVAttachment",
     "RolloutRecord",
+    "StillQwenBackend",
     "TextAttachment",
 ]

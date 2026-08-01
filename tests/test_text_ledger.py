@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from cartridge_memory.models import TextAttachment
-from cartridge_memory.text_ledger import GlobalTextLedger
+from cartridge_memory.text_ledger import GlobalTextLedger, StreamingTextLedger
 
 
 class CharacterTokenizer:
@@ -61,3 +61,23 @@ def test_empty_ledger_has_no_attachment():
     assert ledger.render() == ""
     assert ledger.rendered_tokens == 0
     assert ledger.attachment() is None
+
+
+def test_streaming_ledger_retains_only_recent_tokens_and_resumes_exactly():
+    ledger = StreamingTextLedger(CharacterTokenizer(), max_tokens=16)
+    tool = {
+        "name": "get_account",
+        "arguments": {"id": "a"},
+        "result": {"ok": True, "data": {"ignored": True}},
+    }
+    ledger.update(feedback="Rejected. First correction.", tool_executions=[tool])
+    ledger.update(feedback="Rejected. Second correction.", tool_executions=[tool])
+
+    assert ledger.rendered_tokens == 16
+    assert not hasattr(ledger, "entries")
+    assert ledger.source_tokens > ledger.rendered_tokens
+    state = ledger.state_dict()
+    resumed = StreamingTextLedger(CharacterTokenizer(), max_tokens=16)
+    resumed.load_state_dict(state)
+    assert resumed.state_dict() == state
+    assert resumed.attachment() == ledger.attachment()
