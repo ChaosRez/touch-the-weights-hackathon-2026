@@ -34,7 +34,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["alien_api_env*"]
+include = ["alien_api_env*", "cartridge_memory*"]
 
 # The frozen data ships in the wheel AND is committed in this repo, so a clone or a
 # wheel install both hydrate offline with no credentials.

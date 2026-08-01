@@ -1,0 +1,45 @@
+# Phase 1: one common in-process Qwen tool agent.
+# Run from hackathon/training against the existing Phase 0 team box:
+#
+#   sky exec team-N-box cartridges_phase1.yaml
+
+name: cartridges-phase-1
+workdir: ../..
+
+resources:
+  infra: kubernetes
+  accelerators: H100-80GB:1
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
+
+envs:
+  HF_HOME: /persist/hf
+  HF_HUB_CACHE: /persist/hf/hub
+  PHASE1_N: "20"
+  TOKENIZERS_PARALLELISM: "false"
+
+run: |
+  set -euo pipefail
+  CARTRIDGES_WORKDIR="$PWD"
+  CARTRIDGES_PYTHON=/app/.venv/bin/python
+  test -d "$CARTRIDGES_WORKDIR/hackathon"
+  test -d "$CARTRIDGES_WORKDIR/still"
+
+  VERIFIERS_BEFORE="$($CARTRIDGES_PYTHON -c 'import verifiers; print(verifiers.__version__)')"
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/hackathon"
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/hackathon/environments/alien-api"
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/still"
+  VERIFIERS_AFTER="$($CARTRIDGES_PYTHON -c 'import verifiers; print(verifiers.__version__)')"
+  test "$VERIFIERS_AFTER" = "$VERIFIERS_BEFORE"
+
+  CARTRIDGES_GPU_ID="${CUDA_VISIBLE_DEVICES%%,*}"
+  test -n "$CARTRIDGES_GPU_ID"
+  export CUDA_VISIBLE_DEVICES="$CARTRIDGES_GPU_ID"
+  export CARTRIDGES_DEVICE=cuda:0
+
+  $CARTRIDGES_PYTHON "$CARTRIDGES_WORKDIR/hackathon/examples/cartridge_loop.py" \
+    --n "$PHASE1_N" \
+    --split "" \
+    --seed 17 \
+    --max-new-tokens 2048 \
+    --require-gates \
+    --out /persist/cartridges/runs/phase_1.json
