@@ -168,3 +168,14 @@ class Phase4StateStore:
         temporary.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
         os.replace(temporary, target)
         return target
+
+    def write_failure(self, index: int, failure: dict[str, Any]) -> Path:
+        """Freeze the first uncommitted failing rollout without advancing memory state."""
+
+        target = self.root / f"failure_{index:06d}.json"
+        if target.exists():
+            raise FileExistsError(f"refusing to overwrite immutable Phase 4 failure: {target}")
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(failure, indent=2, ensure_ascii=False) + "\n")
+        os.replace(temporary, target)
+        return target

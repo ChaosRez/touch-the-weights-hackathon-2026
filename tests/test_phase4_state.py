@@ -76,3 +76,15 @@ def test_state_refuses_overwrite_and_resume_metadata_mismatch(tmp_path):
     )
     with pytest.raises(ValueError, match="metadata mismatch"):
         wrong_checkpoint.load()
+
+
+def test_failure_trace_is_immutable_and_does_not_advance_state(tmp_path):
+    store = _store(tmp_path)
+    state = store.initialize(None)
+
+    path = store.write_failure(0, {"index": 0, "parse_errors": ["bad JSON"]})
+
+    assert json.loads(path.read_text())["parse_errors"] == ["bad JSON"]
+    assert state["next_episode"] == 0
+    with pytest.raises(FileExistsError, match="immutable Phase 4 failure"):
+        store.write_failure(0, {"index": 0})

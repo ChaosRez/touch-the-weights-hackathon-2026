@@ -213,6 +213,16 @@ async def main() -> int:
         rollout = await agent.run(task, attachment=attachment, seed=args.seed + index)
         parse_errors = [turn.parse_error for turn in rollout.assistant_turns if turn.parse_error]
         if parse_errors:
+            failure = rollout.to_dict()
+            failure.update(
+                index=index,
+                seq_index=int(task.data.idx),
+                phase4_error="tool_call_parse_error",
+                parse_errors=parse_errors,
+                memory_positions_before=positions_before,
+            )
+            failure_path = store.write_failure(index, failure)
+            print(f"failing trace -> {failure_path}", flush=True)
             raise RuntimeError(f"episode {index} produced parse errors: {parse_errors}")
         update = {
             "added_events": 0,
