@@ -1,0 +1,57 @@
+# Phase 3: four-arm fixed-budget recurrent-retention comparison.
+# Run from hackathon/training against the existing team box:
+#
+#   sky exec -d team-N-box cartridges_phase3.yaml
+
+name: cartridges-phase-3
+workdir: ../..
+
+resources:
+  infra: kubernetes
+  accelerators: H100-80GB:1
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
+
+envs:
+  HF_HOME: /persist/hf
+  HF_HUB_CACHE: /persist/hf/hub
+  PHASE3_MODEL: Qwen/Qwen3-4B
+  PHASE3_DEPTHS: "1 2 4 8 16 32 100"
+  PHASE3_PER_DEPTH: "8"
+  PHASE3_RUN_NAME: phase_3_qwen3_4b_fixed64_v1
+  PHASE3_OUTPUT_ROOT: /persist/cartridges
+  PHASE3_SINGLE_CHECKPOINT: /persist/cartridges/checkpoints/qwen3_4b_single_step.pt
+  PHASE3_RECURRENT_CHECKPOINT: /persist/cartridges/checkpoints/qwen3_4b_recurrent.pt
+  TOKENIZERS_PARALLELISM: "false"
+
+run: |
+  set -euo pipefail
+  CARTRIDGES_WORKDIR="$PWD"
+  CARTRIDGES_PYTHON=/app/.venv/bin/python
+  test -d "$CARTRIDGES_WORKDIR/hackathon"
+  test -d "$CARTRIDGES_WORKDIR/still"
+
+  VIRTUAL_ENV=/app/.venv uv pip install matplotlib
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/still"
+  mkdir -p /persist/cartridges/metrics /persist/cartridges/plots /persist/cartridges/runs
+
+  CARTRIDGES_GPU_ID="${CUDA_VISIBLE_DEVICES%%,*}"
+  test -n "$CARTRIDGES_GPU_ID"
+  export CUDA_VISIBLE_DEVICES="$CARTRIDGES_GPU_ID"
+  read -r -a PHASE3_DEPTH_ARGS <<< "$PHASE3_DEPTHS"
+
+  $CARTRIDGES_PYTHON -m still.eval_recurrent \
+    --model "$PHASE3_MODEL" \
+    --device cuda:0 \
+    --dtype bfloat16 \
+    --depths "${PHASE3_DEPTH_ARGS[@]}" \
+    --per-depth "$PHASE3_PER_DEPTH" \
+    --chunk-tokens 64 \
+    --memory-positions 64 \
+    --num-latents 64 \
+    --latent-dim 256 \
+    --num-blocks 2 \
+    --single-checkpoint "$PHASE3_SINGLE_CHECKPOINT" \
+    --recurrent-checkpoint "$PHASE3_RECURRENT_CHECKPOINT" \
+    --output-root "$PHASE3_OUTPUT_ROOT" \
+    --run-name "$PHASE3_RUN_NAME" \
+    | tee "/persist/cartridges/runs/${PHASE3_RUN_NAME}.jsonl"

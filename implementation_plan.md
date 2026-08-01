@@ -434,6 +434,61 @@ Persist raw metrics and plots under:
 /persist/cartridges/plots/
 ```
 
+Status: **completed on `team-4-box` (2026-08-01, smoke job 58 and final job 59).**
+The final evaluation used Qwen3-4B in bfloat16, the held-out deterministic seed 2903,
+eight examples per depth, depths `{1, 2, 4, 8, 16, 32, 100}`, 64-token source chunks,
+and an equal fixed budget of 64 positions for text, single-step Still, and recurrent Still.
+Each depth has four oldest, two middle, and two newest targets. All 224 method/example
+records were produced and validated.
+
+Overall MCQ accuracy:
+
+| Method | KV/text positions | Depth 1 | Depth 8 | Depth 32 | Depth 100 |
+|---|---:|---:|---:|---:|---:|
+| Full context | grows | 1.000 | 1.000 | 1.000 | 1.000 |
+| Text window | 64 | 1.000 | 0.375 | 0.250 | 0.375 |
+| Single-step Still | 64 | 1.000 | 1.000 | 0.875 | 1.000 |
+| Recurrent Still | 64 | 1.000 | 1.000 | 1.000 | 1.000 |
+
+Oldest-fact MCQ accuracy:
+
+| Method | KV/text positions | Depth 1 | Depth 8 | Depth 32 | Depth 100 |
+|---|---:|---:|---:|---:|---:|
+| Full context | grows | 1.000 | 1.000 | 1.000 | 1.000 |
+| Text window | 64 | 1.000 | 0.000 | 0.000 | 0.000 |
+| Single-step Still | 64 | 1.000 | 1.000 | 1.000 | 1.000 |
+| Recurrent Still | 64 | 1.000 | 1.000 | 1.000 | 1.000 |
+
+The primary accuracy curve alone understates the recurrence-aware gain because the one-token
+classification remains correct after substantial probability drift. At depth 100, the
+single-step checkpoint had a mean answer-CE gap of `0.33062` and forward KL of `0.33279`
+to the full-context teacher. The recurrent checkpoint reduced those to `0.00014` and
+`0.02093`, respectively. Mean compaction time at depth 100 was `51.77 ms/chunk` for the
+single-step checkpoint and `44.60 ms/chunk` for the recurrent checkpoint.
+
+The source-token/slot ratio is `1x`, `8x`, `32x`, and `100x` at the four table depths.
+Thus the depth-100 learned arms represent 6,400 source tokens using 64 fixed KV positions;
+the text arm exposes only its most recent 64 source tokens, while full context grows to
+6,400 positions. Recurrent Still was correct on all 56 held-out examples and matched the
+full-context oracle at every evaluated depth. Single-step Still missed one oldest example
+at depth 4 and one example each at depths 16 and 32, with substantially larger CE/KL drift.
+
+Versioned persistent artifacts (the writer refuses collisions and never overwrites earlier
+result plots):
+
+```text
+/persist/cartridges/metrics/phase_3_qwen3_4b_fixed64_v1/
+/persist/cartridges/plots/phase_3_qwen3_4b_fixed64_v1/
+/persist/cartridges/runs/phase_3_qwen3_4b_fixed64_v1.jsonl
+```
+
+The validated metrics, CSV, Markdown table, and three PNG plots were also pulled to
+`hackathon/reports/phase3/phase_3_qwen3_4b_fixed64_v1/`. Existing plots under
+`hackathon/reports/scratchpad_memory/` and the versioned Phase 3 smoke artifacts were
+left unchanged. Local verification after Phase 3: **30 Still tests** and **121 Hackathon
+tests** passed; Ruff, generated YAML shell syntax, and `git diff --check` were clean.
+The persistent cluster was reused and left running.
+
 ## Cluster scheduling
 
 Do not launch a second SkyPilot cluster. Use additional GPUs only inside the team's existing
