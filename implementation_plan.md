@@ -316,6 +316,28 @@ Log every step:
 Do not implement the paper's full RoPE/identity-initialization fixes unless the depth-1 model
 cannot learn at all. Record their absence as a limitation.
 
+Status: **completed on `team-4-box` (2026-08-01, job 49).** Qwen3-4B trained on one H100
+with a fixed budget of 64 KV positions. The deterministic single-step stage ran 50 depth-1
+steps; endpoint KL moved from `0.01768` to `0.00219`, and mean KL moved from `0.01292`
+over its first 10 steps to `0.00115` over its last 10. The recurrence-aware stage resumed
+that checkpoint for 75 steps with exact depth counts `{1: 8, 2: 15, 4: 22, 8: 30}`;
+endpoint KL moved from `0.00869` to `0.00505`, and first-10/last-10 mean KL moved from
+`0.19546` to `0.01274`. Every step had finite loss and a nonzero Perceiver gradient, the
+frozen base received no gradients, and peak allocated GPU memory was `9.98 GB`.
+
+Artifacts:
+
+```text
+/persist/cartridges/checkpoints/qwen3_4b_single_step.pt  # 492 MB
+/persist/cartridges/checkpoints/qwen3_4b_recurrent.pt    # 492 MB
+/persist/cartridges/runs/phase_2_training.jsonl
+```
+
+The implementation uses deterministic synthetic facts, an exact 50/25/25 target-age schedule,
+seeded model initialization, and a last-step-gradient `recompact_train` path. The paper's RoPE,
+final-RMSNorm, and identity-initialization fixes remain intentionally absent as documented v1
+limitations. The existing shared cluster was reused and left running.
+
 ## Phase 3 — evaluation and presentation artifacts
 
 Add:

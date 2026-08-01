@@ -1,0 +1,52 @@
+# Phase 2: single-step then recurrence-aware fixed-budget STILL training.
+# Run from hackathon/training against the existing team box:
+#
+#   sky exec -d team-N-box cartridges_phase2.yaml
+
+name: cartridges-phase-2
+workdir: ../..
+
+resources:
+  infra: kubernetes
+  accelerators: H100-80GB:1
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
+
+envs:
+  HF_HOME: /persist/hf
+  HF_HUB_CACHE: /persist/hf/hub
+  PHASE2_MODEL: Qwen/Qwen3-4B
+  PHASE2_SINGLE_STEPS: "50"
+  PHASE2_RECURRENT_STEPS: "75"
+  PHASE2_SINGLE_OUTPUT: /persist/cartridges/checkpoints/qwen3_4b_single_step.pt
+  PHASE2_RECURRENT_OUTPUT: /persist/cartridges/checkpoints/qwen3_4b_recurrent.pt
+  PHASE2_LOG_OUTPUT: /persist/cartridges/runs/phase_2_training.jsonl
+  TOKENIZERS_PARALLELISM: "false"
+
+run: |
+  set -euo pipefail
+  CARTRIDGES_WORKDIR="$PWD"
+  CARTRIDGES_PYTHON=/app/.venv/bin/python
+  test -d "$CARTRIDGES_WORKDIR/hackathon"
+  test -d "$CARTRIDGES_WORKDIR/still"
+
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/still"
+  mkdir -p /persist/cartridges/checkpoints /persist/cartridges/runs
+
+  CARTRIDGES_GPU_ID="${CUDA_VISIBLE_DEVICES%%,*}"
+  test -n "$CARTRIDGES_GPU_ID"
+  export CUDA_VISIBLE_DEVICES="$CARTRIDGES_GPU_ID"
+
+  $CARTRIDGES_PYTHON -m still.train_recurrent \
+    --model "$PHASE2_MODEL" \
+    --device cuda:0 \
+    --dtype bfloat16 \
+    --single-steps "$PHASE2_SINGLE_STEPS" \
+    --recurrent-steps "$PHASE2_RECURRENT_STEPS" \
+    --learning-rate 4e-5 \
+    --num-latents 64 \
+    --latent-dim 256 \
+    --num-blocks 2 \
+    --chunk-tokens 64 \
+    --single-output "$PHASE2_SINGLE_OUTPUT" \
+    --recurrent-output "$PHASE2_RECURRENT_OUTPUT" \
+    | tee "$PHASE2_LOG_OUTPUT"
