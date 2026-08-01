@@ -7,8 +7,11 @@ import json
 import math
 import random
 from collections.abc import Callable
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
+
+from cartridge_memory.legal_memory import legal_events
 
 ARMS = ("cold", "text64", "still_single", "still_recurrent")
 LABELS = {
@@ -132,6 +135,16 @@ def load_arms(specifications: list[str]) -> dict[str, dict[str, Any]]:
         records = result.get("records", [])
         if [record.get("index") for record in records] != list(range(len(records))):
             raise ValueError(f"{arm} records are not in contiguous seq_index order")
+        expected_hashes: set[str] = set()
+        if arm != "cold":
+            for record in records:
+                for event in legal_events(
+                    feedback=record["feedback"],
+                    tool_executions=record["tool_executions"],
+                ):
+                    expected_hashes.add(sha256(event.encode()).hexdigest())
+        if result.get("event_hashes") != sorted(expected_hashes):
+            raise ValueError(f"{arm} legal-event hash audit failed")
     lengths = {len(result["records"]) for result in data.values()}
     models = {result["model"] for result in data.values()}
     seeds = {result["seed"] for result in data.values()}

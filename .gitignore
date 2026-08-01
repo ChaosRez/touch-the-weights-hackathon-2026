@@ -12,5 +12,12 @@ dist/
 live_traces/
 runs/
 
+# Phase 4 raw arm records/checkpoints include prompts, answers, and tool traces.
+# Version aggregate report directories, but never the per-arm immutable payloads.
+reports/phase4/**/cold/
+reports/phase4/**/text64/
+reports/phase4/**/still_single/
+reports/phase4/**/still_recurrent/
+
 # Local cluster credentials. Never commit this file.
 skills/cluster/setup-team-4-cluster.sh

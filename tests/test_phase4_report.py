@@ -59,6 +59,8 @@ def test_load_arms_refuses_unpaired_results(tmp_path):
     for arm in ("cold", "text64", "still_single", "still_recurrent"):
         path = tmp_path / f"{arm}.json"
         records = [_record(0, 0.0, 1.0)]
+        records[0]["feedback"] = "Accepted."
+        records[0]["tool_executions"] = []
         if arm == "text64":
             records[0]["episodeId"] = "different"
         path.write_text(
@@ -68,6 +70,7 @@ def test_load_arms_refuses_unpaired_results(tmp_path):
                     "arm": arm,
                     "model": "tiny",
                     "seed": 17,
+                    "event_hashes": [],
                     "records": records,
                 }
             )
