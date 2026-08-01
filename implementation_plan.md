@@ -2,7 +2,9 @@
 
 ## Current state and objective
 
-Phases 1--3 are complete. They establish two useful prerequisites:
+Phases 1--3 are complete. Phase 4 was implemented and exercised through its declared cluster
+smoke gates, then stopped before the 240-episode promotion because both neural arms violated the
+predeclared runtime/submission criteria. Phases 1--3 establish two useful prerequisites:
 
 1. The local Qwen agent can use the real Alien API tools and verifier.
 2. A recurrence-aware Still compactor can retain synthetic facts through 100 updates while
@@ -663,6 +665,65 @@ cluster.
 Once the smoke gates pass, teammates 1 and 2 review traces for cache use and leakage while
 teammate 3 launches the full arms. Do not split model behavior or tool parsing into separate forks;
 all conditions must continue to use the same agent implementation.
+
+### Phase 4 verified status — stopped at the promotion gate
+
+Status: **implementation complete; 240-episode promotion intentionally not launched
+(2026-08-01).** The legal-event boundary, streaming Text64 ledger, recurrent fixed-size KV
+ledger, `StillQwenBackend`, atomic per-episode checkpoint/resume, immutable result writer,
+paired bootstrap report, and versioned plots are implemented. The offline report recomputes every
+legal-event hash from the explicit feedback/tool API before joining fleet-only preference and trap
+tags. It rejects a result if those hashes do not exactly match the arm's declared memory events.
+
+All four real three-episode jobs (68--71) passed the required gates: scored answers, at least one
+non-answer tool result, no trace errors, finite caches, and exactly 64 neural memory positions.
+The 30-episode promotion smoke then produced:
+
+| Arm | Completed | Acceptance | Value correct | Typed submissions | Mean tool calls | Gate |
+|---|---:|---:|---:|---:|---:|---|
+| Cold | 30/30 | 0.167 | 0.467 | 15/30 | 0.667 | pass |
+| Text64 | 30/30 | 0.167 | 0.467 | 10/30 | 0.667 | pass |
+| Still64 single-step | 30/30 | 0.000 | 0.033 | 1/30 | 0.033 | **fail: typed submission collapse** |
+| Still64 recurrence-aware | 8/30 | 0.000 | 0.125 | 1/8 | 0.250 | **fail: malformed cached decode at episode 8** |
+
+The recurrence-aware failure was replayed from the exact episode-8 checkpoint (job 76) and
+reproduced the same three parse failures. The first failing rollout is frozen as
+`failure_000008.json`. Chat-template parity, registered Still attention, cache finiteness, and the
+64-position invariant all passed. The frozen raw output shows the remaining failure is cached
+decoding behavior: it begins a `submit_answer` tool call, fails to close it, and repeats
+schema-like closing tags to the generation limit. The shared parser and prompt were not changed
+for a neural arm.
+
+The fair common-prefix report therefore uses episodes 0--7 from all four immutable arm results:
+
+| Method | Acceptance | Value correct | Typed-submission rate | Mean tool calls | Positions |
+|---|---:|---:|---:|---:|---:|
+| Cold | 0.125 | 0.625 | 0.375 | 1.000 | 0 |
+| Text64 | 0.250 | 0.500 | 0.375 | 0.750 | 64 |
+| Still64 single-step | 0.000 | 0.125 | 0.125 | 0.125 | 64 |
+| Still64 recurrence-aware | 0.000 | 0.125 | 0.125 | 0.250 | 64 |
+
+The recurrence-aware paired acceptance delta was `-0.125` versus Cold (95% paired bootstrap CI
+`[-0.375, 0.000]`) and `-0.250` versus Text64 (`[-0.625, 0.000]`). Lower neural tool counts are
+not an efficiency win because they coincide with suppressed tool/answer submission and worse
+acceptance. The predeclared positive claim is unsupported; this is the planned domain-transfer
+failure outcome, motivating task-shaped distillation from legal feedback and observed tool events.
+
+Persistent and pulled artifacts:
+
+```text
+/persist/cartridges/phase4/qwen3_4b_seed17_smoke3_v1/
+/persist/cartridges/phase4/qwen3_4b_seed17_v1/
+hackathon/reports/phase4/qwen3_4b_seed17_smoke3_v1/
+hackathon/reports/phase4/qwen3_4b_seed17_v1/
+```
+
+The paired report is under `report_paired_008/`; raw per-arm records and tensor states are locally
+ignored because they contain prompts, answers, and traces. Existing scratchpad and Phase 3 plots,
+including `oldest_accuracy_vs_depth.png`, were left unchanged. Final local verification: **137
+Hackathon tests** and **30 Still tests** passed, Ruff and `git diff --check` were clean. The existing
+`team-4-box` remains up with `/persist` intact; no second cluster was created and no 240-episode
+jobs were submitted after the gate failure.
 
 ## Cluster scheduling
 

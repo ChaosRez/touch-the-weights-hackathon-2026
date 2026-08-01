@@ -1,0 +1,456 @@
+{
+  "format": "phase4-comparison-v1",
+  "model": "Qwen/Qwen3-4B",
+  "seed": 17,
+  "episodes_per_arm": 8,
+  "summary": {
+    "cold": {
+      "acceptance": 0.125,
+      "final_60_acceptance": 0.125,
+      "value_correct": 0.625,
+      "typed_submission_rate": 0.375,
+      "mean_tool_calls": 1.0,
+      "tool_calls_by_stream_quarter": [
+        1.0
+      ],
+      "memory_positions": 0,
+      "source_tokens_represented": 0,
+      "compression_ratio": null,
+      "recurrence_count": 0,
+      "compaction_seconds": 0.0,
+      "teach_retest": {
+        "teach": {
+          "n": 8,
+          "acceptance": 0.125
+        },
+        "retest": {
+          "n": 0,
+          "acceptance": null
+        }
+      }
+    },
+    "text64": {
+      "acceptance": 0.25,
+      "final_60_acceptance": 0.25,
+      "value_correct": 0.5,
+      "typed_submission_rate": 0.375,
+      "mean_tool_calls": 0.75,
+      "tool_calls_by_stream_quarter": [
+        0.75
+      ],
+      "memory_positions": 64,
+      "source_tokens_represented": 160,
+      "compression_ratio": 2.5,
+      "recurrence_count": 0,
+      "compaction_seconds": 0.0,
+      "teach_retest": {
+        "teach": {
+          "n": 8,
+          "acceptance": 0.25
+        },
+        "retest": {
+          "n": 0,
+          "acceptance": null
+        }
+      }
+    },
+    "still_single": {
+      "acceptance": 0.0,
+      "final_60_acceptance": 0.0,
+      "value_correct": 0.125,
+      "typed_submission_rate": 0.125,
+      "mean_tool_calls": 0.125,
+      "tool_calls_by_stream_quarter": [
+        0.125
+      ],
+      "memory_positions": 64,
+      "source_tokens_represented": 49,
+      "compression_ratio": 0.765625,
+      "recurrence_count": 2,
+      "compaction_seconds": 0.22663136897608638,
+      "teach_retest": {
+        "teach": {
+          "n": 8,
+          "acceptance": 0.0
+        },
+        "retest": {
+          "n": 0,
+          "acceptance": null
+        }
+      }
+    },
+    "still_recurrent": {
+      "acceptance": 0.0,
+      "final_60_acceptance": 0.0,
+      "value_correct": 0.125,
+      "typed_submission_rate": 0.125,
+      "mean_tool_calls": 0.25,
+      "tool_calls_by_stream_quarter": [
+        0.25
+      ],
+      "memory_positions": 64,
+      "source_tokens_represented": 51,
+      "compression_ratio": 0.796875,
+      "recurrence_count": 3,
+      "compaction_seconds": 0.33313648495823145,
+      "teach_retest": {
+        "teach": {
+          "n": 8,
+          "acceptance": 0.0
+        },
+        "retest": {
+          "n": 0,
+          "acceptance": null
+        }
+      }
+    }
+  },
+  "paired_deltas": {
+    "text64": {
+      "cold": {
+        "acceptance": {
+          "delta": 0.125,
+          "ci95_low": 0.0,
+          "ci95_high": 0.375,
+          "bootstrap_samples": 10000
+        },
+        "tool_calls": {
+          "delta": -0.25,
+          "ci95_low": -0.625,
+          "ci95_high": 0.0,
+          "bootstrap_samples": 10000
+        }
+      }
+    },
+    "still_single": {
+      "cold": {
+        "acceptance": {
+          "delta": -0.125,
+          "ci95_low": -0.375,
+          "ci95_high": 0.0,
+          "bootstrap_samples": 10000
+        },
+        "tool_calls": {
+          "delta": -0.875,
+          "ci95_low": -1.25,
+          "ci95_high": -0.5,
+          "bootstrap_samples": 10000
+        }
+      },
+      "text64": {
+        "acceptance": {
+          "delta": -0.25,
+          "ci95_low": -0.625,
+          "ci95_high": 0.0,
+          "bootstrap_samples": 10000
+        },
+        "tool_calls": {
+          "delta": -0.625,
+          "ci95_low": -1.0,
+          "ci95_high": -0.125,
+          "bootstrap_samples": 10000
+        }
+      }
+    },
+    "still_recurrent": {
+      "cold": {
+        "acceptance": {
+          "delta": -0.125,
+          "ci95_low": -0.375,
+          "ci95_high": 0.0,
+          "bootstrap_samples": 10000
+        },
+        "tool_calls": {
+          "delta": -0.75,
+          "ci95_low": -1.25,
+          "ci95_high": -0.25,
+          "bootstrap_samples": 10000
+        }
+      },
+      "text64": {
+        "acceptance": {
+          "delta": -0.25,
+          "ci95_low": -0.625,
+          "ci95_high": 0.0,
+          "bootstrap_samples": 10000
+        },
+        "tool_calls": {
+          "delta": -0.5,
+          "ci95_low": -0.875,
+          "ci95_high": -0.125,
+          "bootstrap_samples": 10000
+        }
+      }
+    }
+  },
+  "by_preference": {
+    "annual_revenue_basis": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "count_authority": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 1.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "country_basis": {
+      "cold": {
+        "n": 1,
+        "acceptance": 1.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 1.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "inventory_scope": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "money_rounding": {
+      "cold": {
+        "n": 2,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 2,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 2,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 2,
+        "acceptance": 0.0
+      }
+    },
+    "money_unit": {
+      "cold": {
+        "n": 3,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 3,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 3,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 3,
+        "acceptance": 0.0
+      }
+    },
+    "page_naming": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "process_page_authority": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "quarter_calendar": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "revenue_stage_scope": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    },
+    "status_style": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0
+      }
+    }
+  },
+  "by_world_trap": {
+    "deprecated_inventory_route": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0,
+        "mean_tool_calls": 2.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 0.0,
+        "mean_tool_calls": 1.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0,
+        "mean_tool_calls": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0,
+        "mean_tool_calls": 0.0
+      }
+    },
+    "search_cap": {
+      "cold": {
+        "n": 1,
+        "acceptance": 0.0,
+        "mean_tool_calls": 1.0
+      },
+      "text64": {
+        "n": 1,
+        "acceptance": 1.0,
+        "mean_tool_calls": 1.0
+      },
+      "still_single": {
+        "n": 1,
+        "acceptance": 0.0,
+        "mean_tool_calls": 0.0
+      },
+      "still_recurrent": {
+        "n": 1,
+        "acceptance": 0.0,
+        "mean_tool_calls": 0.0
+      }
+    },
+    "no_trap": {
+      "cold": {
+        "n": 6,
+        "acceptance": 0.16666666666666666,
+        "mean_tool_calls": 0.8333333333333334
+      },
+      "text64": {
+        "n": 6,
+        "acceptance": 0.16666666666666666,
+        "mean_tool_calls": 0.6666666666666666
+      },
+      "still_single": {
+        "n": 6,
+        "acceptance": 0.0,
+        "mean_tool_calls": 0.16666666666666666
+      },
+      "still_recurrent": {
+        "n": 6,
+        "acceptance": 0.0,
+        "mean_tool_calls": 0.3333333333333333
+      }
+    }
+  },
+  "claim_supported": false,
+  "claim_rule": "recurrent acceptance delta CI is positive versus both baselines, or acceptance is non-inferior and paired tool-call delta CI is negative versus both"
+}
