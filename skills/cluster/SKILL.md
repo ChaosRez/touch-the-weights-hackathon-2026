@@ -96,9 +96,9 @@ name: myjob
 resources:
   infra: kubernetes
   accelerators: H100-80GB:4          # your box size (4 is the default; more only if free)
-  # The prepared hackathon image (PUBLIC, anonymous pull — no credential). Digest-pinned;
-  # your organizers give you the current digest. It already contains prime-rl.
-  image_id: docker:<registry>/ml-hackathon/prime-rl-base@sha256:<digest>
+  # The prepared hackathon image (PUBLIC, anonymous pull — no credential). It already
+  # contains prime-rl. Digest-pinned; if organizers announce a rotated digest, use that.
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
 config:
   kubernetes:
     pod_config:
