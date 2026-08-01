@@ -1,22 +1,28 @@
-# Revised implementation plan — fixed-budget recurrent KV memory
+# Implementation plan — agenda-aligned recurrent KV memory
 
-## Objective and cut line
+## Current state and objective
 
-There are fewer than two hours before the presentation. The goal is no longer to build the
-complete retrieval-based Cartridges roadmap. The goal is to leave with two concrete results:
+Phases 1--3 are complete. They establish two useful prerequisites:
 
-1. A real Alien API result showing that the local Qwen tool-agent integration works.
-2. A controlled fixed-budget experiment showing how recurrence-aware training affects factual
-   retention over repeated KV-cache compactions.
+1. The local Qwen agent can use the real Alien API tools and verifier.
+2. A recurrence-aware Still compactor can retain synthetic facts through 100 updates while
+   holding memory at 64 KV positions.
 
-The main research question is:
+Those results validate the mechanism, but they are not yet the KV-compaction track result. The
+track evaluates continual learning on the real 240-episode Alien API stream. The new primary
+objective is therefore:
 
-> A single-step compactor is trained on raw model K/V but receives its own synthetic K/V after
-> the first recurrence. Does training on those recurrent states prevent the depth-2 collapse and
-> preserve early facts for more compaction cycles?
+> Recurrently compact only the legal memory produced by prior Alien API rollouts into a fixed
+> 64-position KV state, attach that state to Qwen3-4B on every later episode, and measure whether
+> acceptance rises and tool calls fall relative to paired stateless and text-window controls.
 
-The minimum presentation-quality result is an accuracy-versus-compaction-depth plot. Full
-240-episode compact-cache integration is explicitly deferred.
+The synthetic depth curve remains the controlled explanation for why recurrence-aware training
+is necessary. The all-240 Alien API learning curve becomes the headline result.
+
+The repository's published `0.421` scratchpad acceptance and `8.3` mean tool calls use
+`gpt-5.6-luna`. They are the official track reference, but not a causal comparison to a Qwen3-4B
+arm. The fair ablation keeps the same Qwen model, tools, episode order, seeds, generation settings,
+and legal memory events across all arms; only the memory representation changes.
 
 ## Decisions after the organizer discussion
 
@@ -24,7 +30,7 @@ The minimum presentation-quality result is an accuracy-versus-compaction-depth p
 |---|---|
 | Final experimental model | `Qwen/Qwen3-4B` |
 | Existing integration result | Keep the completed Qwen3-8B Phase 1 result |
-| Memory design for today | One global fixed-size recurrent KV state |
+| Primary memory design | One global fixed-size recurrent KV state |
 | Retrieval/RAG | Deferred; not part of the main comparison |
 | Inference implementation | Hugging Face/PyTorch in-process |
 | vLLM/Rust cache injection | Deferred until after the algorithmic result |
@@ -96,10 +102,10 @@ hackathon/training/cartridges_phase1.yaml
 `hackathon/uv.lock` and `hackathon/skills/cluster/loops.md` are also untracked. Include them in
 that commit only if intentional; they are not required to describe the Phase 1 implementation.
 
-## Remaining schedule
+## Historical Phase 1--3 schedule
 
-Use deadline-relative checkpoints. When a checkpoint is missed, follow the stated fallback
-instead of expanding scope.
+These checkpoints produced the completed results recorded below. They are retained as execution
+history rather than as current deadlines.
 
 | Deadline | Deliverable |
 |---|---|
@@ -489,6 +495,175 @@ left unchanged. Local verification after Phase 3: **30 Still tests** and **121 H
 tests** passed; Ruff, generated YAML shell syntax, and `git diff --check` were clean.
 The persistent cluster was reused and left running.
 
+## Phase 4 — track-compliant Alien API KV memory
+
+### 4.0 Experimental contract
+
+Run `split=""` so all 240 episodes execute in `seq_index` order. The neural arms must be
+strictly sequential: episode *i* is scored and finalized, its legal memory events update the
+state, and only then may episode *i + 1* start.
+
+The memory writer API accepts explicit `feedback` and `tool_executions` arguments rather than a
+whole result record. It may consume only:
+
+- `trace.info["feedback"]`, keeping useful correction sentences verbatim.
+- The agent's own tool name, arguments, returned success/error code, and error message.
+
+It must never consume the accepted label, `trace.info["accepted"]`, reward, metric values,
+`invoked`, `violated`, `world_traps`, `value_defensible`, the episode answer, or any data loaded
+from the fleet JSONL. Those fields may be used only after the run for reporting. Exclude the
+`submit_answer` call from tool memory because its arguments are the agent's answer, not an
+observation.
+
+Use one deterministic serializer for every memory arm:
+
+```text
+REVIEWER: <verbatim correction sentence>
+TOOL: <name>(<canonical JSON arguments>) -> ok
+TOOL: <name>(<canonical JSON arguments>) -> ERROR:<code>:<message>
+```
+
+Ignore `Accepted.` and the contentless "does not follow from the records" rejection. Deduplicate
+correction and tool events with content hashes; hashes may control repeated writes but are never
+decoded or exposed to the model. No LLM-written summary is used in the primary comparison, so an
+OpenAI call cannot become a hidden difference between arms.
+
+### 4.1 Attach the trained Still cache to the Qwen tool agent
+
+Add a `StillQwenBackend` beside `HuggingFaceQwenBackend` and reuse the existing `QwenToolAgent`.
+It must:
+
+1. Load `Qwen/Qwen3-4B`, `STILLConfig(num_latents=64, latent_dim=256, num_blocks=2)`, and either
+   the single-step or recurrent checkpoint.
+2. Render the current episode's system message, live tool conversation, and tool schemas through
+   the same Qwen chat template as the cold backend.
+3. Pass only those live tokens plus the optional `CompactKVAttachment` to
+   `STILLModel.decode_generate`.
+4. Reuse the same prior-episode attachment on every tool turn within an episode. Current-episode
+   tool results stay live; they enter persistent memory only after `score()` and `finalize()`.
+5. Match the cold arm's sampling parameters and per-episode seed exactly.
+
+Load the Phase 2 checkpoint's nested `perceiver` state and validate its recorded latent/model
+configuration before generation. Do not route through vLLM or the Still HTTP server for this
+experiment; in-process inference preserves tool schemas and makes the attached state explicit.
+
+### 4.2 Recurrent fixed-budget memory state
+
+Add a `RecurrentKVLedger` with this update rule:
+
+```python
+for event in legal_events(feedback, tool_executions):
+    for chunk in chunks(tokenizer.encode(event), size=64):
+        state = model.compact_tokens(chunk) if state is None else model.recompact(state, chunk)
+```
+
+After the first event, the state must always contain exactly 64 positions at every layer,
+regardless of source tokens or episode count. Track but do not feed these observability fields:
+
+- Total legal source tokens represented.
+- Number of recurrent compaction updates.
+- Current memory positions.
+- Compaction time per episode.
+- SHA-256 hashes of ingested events for deduplication and audit.
+
+Checkpoint records and the compact tensors after every episode under `/persist`; resume must
+restore the exact next episode, cache, counters, and hash set. The loop must never rebuild the
+cache from stored result records during a normal run.
+
+Replace the existing text control's all-history `entries` list with a streaming 64-token window
+for the final experiment. This prevents the control from retaining a semantic copy of evicted
+text outside its declared memory budget.
+
+### 4.3 Paired arms
+
+Run the same 240 episodes with Qwen3-4B in each arm:
+
+| Arm | Persistent model-visible memory | Purpose |
+|---|---:|---|
+| Cold | 0 positions | Same-model stateless baseline |
+| Text64 | Most recent 64 text tokens | Equal-position non-neural control |
+| Still64 single-step | 64 recurrent KV positions | Measures recurrence distribution shift |
+| Still64 recurrence-aware | 64 recurrent KV positions | Primary method |
+| Full legal text, optional | Grows | Same-model information upper bound; not equal budget |
+
+The official GPT-5.6 scratchpad result remains a clearly labeled external reference line. Do not
+describe a Qwen-vs-GPT difference as a memory improvement.
+
+First run episodes 0--29 as a mechanical smoke. Continue to all 240 unless there are parse/runtime
+errors, non-finite caches, a position-count violation, forbidden-field ingestion, or a collapse in
+typed answer submission. Do not stop merely because early acceptance is flat: useful corrections
+and retests accumulate over the stream.
+
+Use one GPU per arm inside the existing team box. Memory arms are sequential internally, but the
+arms can run concurrently. Use unique output and checkpoint paths; do not create another SkyPilot
+cluster.
+
+### 4.4 Required report
+
+Extend the existing scratchpad reporting logic for the Qwen arms. Produce:
+
+- Overall and rolling-window `preference_accepted` for all 240 episodes.
+- Overall and rolling-window `value_correct` and typed-submission rate.
+- Mean tool calls and tool calls by stream quarter.
+- Teach-then-retest acceptance, with teaching/retest tags joined only during offline reporting.
+- Per-preference and per-world-trap breakdowns, also joined only offline.
+- Neural source tokens represented, recurrence count, fixed positions, compression ratio, and
+  compaction time.
+- Paired acceptance deltas with bootstrap confidence intervals against Cold and Text64.
+
+Primary table:
+
+| Method | Acceptance | Final-60 acceptance | Value correct | Mean tool calls | Memory positions |
+|---|---:|---:|---:|---:|---:|
+| Cold | | | | | 0 |
+| Text64 | | | | | 64 |
+| Still64 single-step | | | | | 64 |
+| Still64 recurrence-aware | | | | | 64 |
+
+Primary plot: rolling acceptance versus episode index. Secondary plots: rolling tool calls and the
+already-completed synthetic oldest-fact accuracy versus recurrence depth.
+
+The minimum positive claim is not "infinite memory." It is:
+
+> With Qwen3-4B and the same 64-position budget, recurrent neural memory improves acceptance or
+> efficiency over both a cold agent and a 64-token text window on the real continual-learning
+> stream.
+
+If that claim is unsupported, report the result as a domain-transfer failure: the compactor
+retained template facts at depth 100 but did not turn real reviewer corrections and tool outcomes
+into usable agent behavior. That is a valid result and directly motivates task-shaped
+distillation.
+
+### 4.5 Verification gates
+
+Before the 240-episode run:
+
+- Unit test that a compact attachment reaches the registered Still attention path.
+- Unit test that 100 event updates remain exactly 64 positions with finite K/V and bias tensors.
+- Unit test that the legal-event serializer cannot receive a whole result record, preserves
+  correction text verbatim, and excludes `submit_answer`.
+- Parity test that cold generation through `StillQwenBackend(cache=None)` renders the same live
+  chat template and generation arguments as the ordinary Qwen backend.
+- Resume test that uninterrupted and checkpoint-resumed event streams produce identical cache
+  tensors and counters.
+- A 3-episode real smoke with at least one tool result, one scored answer, and no trace error.
+
+After the run, execute the full Hackathon and Still test suites, generate the report from immutable
+result files, pull every `/persist/cartridges/phase4/` artifact locally, and only then release the
+cluster.
+
+### 4.6 Three-person split
+
+| Teammate | Primary responsibility | Handoff |
+|---|---|---|
+| 1 | `StillQwenBackend`, checkpoint loading, attachment parity | One real episode decoded with a 64-position cache |
+| 2 | Legal event serializer, `RecurrentKVLedger`, checkpoint/resume | Audited fixed-size state after 100 updates |
+| 3 | Multi-arm runner, cluster jobs, report and plots | Paired 30-episode smoke, then immutable 240-episode artifacts |
+
+Once the smoke gates pass, teammates 1 and 2 review traces for cache use and leakage while
+teammate 3 launches the full arms. Do not split model behavior or tool parsing into separate forks;
+all conditions must continue to use the same agent implementation.
+
 ## Cluster scheduling
 
 Do not launch a second SkyPilot cluster. Use additional GPUs only inside the team's existing
@@ -502,48 +677,43 @@ Suggested allocation:
 
 | GPU | Work |
 |---:|---|
-| 0 | Qwen3-4B cold Alien API run |
-| 1 | Recurrent code smoke, then single-step/recurrent training |
-| 2 | Dataset validation and evaluation smoke |
-| 3 | Text-memory Alien API control or independent evaluation |
-| 4–5, if already available | Latent-count ablation or parallel final evaluation |
+| 0 | Qwen3-4B Cold, then Full legal text if time permits |
+| 1 | Qwen3-4B Text64 |
+| 2 | Qwen3-4B Still64 single-step |
+| 3 | Qwen3-4B Still64 recurrence-aware |
+| 4–5, if already available | Report smoke or a repeated-seed robustness run |
 
 Use unique output paths and avoid running two jobs that write the same checkpoint. Model downloads
 must use the shared `/persist/hf` cache.
 
-## Hard fallbacks
+## Phase 4 fallbacks
 
-### If Qwen3-4B does not produce an agent baseline by T−60
+### If fewer than four GPUs are visible
 
-Use the verified 8B Phase 1 numbers in the presentation and stop the 4B run. Do not debug the
-agent; it is already proven.
+Run Cold and recurrence-aware Still64 first, then Text64, then single-step. Compare only arms with
+the same completed episode prefix; never compare 240 episodes in one arm to 30 in another.
 
-### If recurrent training does not start by T−45
+### If compact-cache generation breaks tool calling
 
-Evaluate the single-step checkpoint recurrently and show the failure curve against full context
-and text64. A carefully measured collapse is still a valid result and directly motivates the
-recurrence-aware dataset.
+Freeze the first failing trace and verify chat-template parity, registered-attention invocation,
+cache position count, and output decoding in that order. Do not change the common tool parser or
+prompt for only one arm.
 
-### If depth-1 training cannot learn
+### If the current checkpoint shows no real-stream gain
 
-Run a 10-step Qwen3-0.6B smoke to validate plumbing. Present the 4B failure as an implementation
-limitation caused by the incomplete Still architecture; do not spend the remaining time porting
-all paper fixes.
+Keep the result. Report synthetic retention success alongside real-domain transfer failure. The
+next experiment is task-shaped teacher/student distillation from legal feedback and observed tool
+events; do not silently add labels or switch to RAG.
 
-### If no learned checkpoint is usable by T−20
+### If a full arm is interrupted
 
-Freeze code. Present:
-
-- The verified 8B Alien API agent result.
-- The fixed-budget benchmark and baselines.
-- Untrained/single-step degradation by recurrence depth, if available.
-- The implemented recurrence-training path and its first loss/gradient evidence.
+Resume from its per-episode checkpoint. If resume is not bitwise-equivalent in the verification
+test, restart that arm rather than reconstructing neural state from the result JSON.
 
 ## Explicitly deferred
 
 - Embedding retrieval and RAG.
 - Per-item swappable cartridges.
-- Full 240-episode compact-cache evaluation.
 - vLLM or Rust external KV-cache injection.
 - Full backpropagation through 100 compaction cycles.
 - Hyperbolic embeddings.
@@ -551,29 +721,31 @@ Freeze code. Present:
 - The episode-180 radical-exploration policy.
 
 The exploration plateau is orthogonal: a memory system cannot store knowledge that the policy
-never discovers. Treat novelty-triggered exploration as follow-up work, not part of today's
+never discovers. Treat novelty-triggered exploration as follow-up work, not part of the primary
 compaction comparison.
 
 ## Presentation narrative
 
-1. **Agent foundation:** local Qwen3-8B completed 20 real tool-using Alien API episodes with no
-   parse/runtime errors and `value_correct=0.55`.
-2. **Observed blocker:** one-step Still consumes raw model K/V during training but synthetic
-   Perceiver-produced K/V after the first recurrence, causing a state-distribution shift.
-3. **Intervention:** generate training examples at randomized recurrence depths and train the
-   compactor on its own drifted states while holding the cache at 64 positions.
-4. **Comparison:** full context versus equal-position text window versus single-step and
-   recurrence-aware neural compaction.
-5. **Conclusion:** report the retention-depth frontier honestly, including failure depth and the
-   cost of extending it.
+1. **Track task:** Alien API rewards applying lessons from earlier rollouts; the published
+   scratchpad reaches `0.421` acceptance versus `0.150` stateless with GPT-5.6.
+2. **Agent foundation:** local Qwen completed real tool-using Alien API episodes without
+   parse/runtime errors, so value computation and memory representation can be separated.
+3. **Compaction blocker:** a single-step compactor sees its own synthetic K/V after the first
+   recurrence, creating a state-distribution shift.
+4. **Mechanism result:** recurrence-aware Qwen3-4B training retained held-out template facts
+   through 100 updates using exactly 64 KV positions and sharply reduced depth-100 KL drift.
+5. **Track result:** compare Cold, Text64, single-step Still64, and recurrence-aware Still64 on
+   the same 240 ordered Alien API episodes using only legal prior-rollout memory.
+6. **Conclusion:** report the real learning curve, value/tool-call diagnostics, and any gap
+   between controlled retention and useful continual-learning behavior.
 
 The ideal claim is:
 
-> Recurrence-aware training moves the fixed-budget retention cliff to greater compaction depth
-> than a single-step compactor, especially for facts introduced in the first chunk.
+> Recurrence-aware Still lets Qwen3-4B turn more prior-rollout feedback into accepted answers than
+> cold inference or a 64-token text window while holding neural memory at 64 KV positions.
 
 If the intervention does not improve the curve, the result is still useful:
 
-> Repeated KV synthesis introduces a severe state-distribution shift that mixed-depth last-step
-> training alone does not solve, identifying the need for full recurrent training or stronger
-> architectural fixes.
+> Recurrence-aware Still retains controlled facts for 100 updates, but that ability does not
+> transfer into improved Alien API behavior, identifying task-shaped distillation—not additional
+> synthetic depth—as the next bottleneck.
