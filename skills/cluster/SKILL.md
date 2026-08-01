@@ -1,63 +1,104 @@
 ---
 name: cluster
-description: Run GPU workloads on the Construct Labs cluster via SkyPilot. Use when launching training or inference for the hackathon, debugging a pending or evicted job, or checking what is running.
+description: Run GPU workloads on the Construct Labs cluster via SkyPilot. Use when bringing up your team's GPU box, running training/inference on it, persisting data, SSHing in, or debugging access.
 ---
 
-# Cluster access
+# Cluster access — your team's persistent GPU box
 
-SkyPilot is the only entrypoint. No kubeconfig, no kubectl, no node SSH. One endpoint, one
-identity per person or agent, everything visible in one dashboard. You run in an isolated
-`hackathon` workspace: you can see and manage only your own jobs, never anyone else's.
+SkyPilot is the only entrypoint. No kubeconfig, no kubectl, no node SSH. Your team gets
+**one persistent GPU box** in a private `hackathon` workspace: you bring it up once, work on
+it all event, and everything you write on it stays there until you tear it down.
 
-> Event-specific values your organizers give you:
-> `SKYPILOT_API_SERVER_ENDPOINT` (with your `user:password`), the Tailscale login, and the
-> **training image digest**. Fill them in before running anything.
+> Values your organizers give you (fill these in before running anything):
+> the **Tailscale auth key**, your **team login** (`team-N` + password), and the **training
+> image digest**. One login per team — everyone on the team uses the same one.
 
-## Setup, once
+## 1. Get on our network + connect (once per person)
 
-1. Install Tailscale and join the tailnet with the account/key the organizers give you.
-   Verify: `tailscale status` lists the cluster head, and the dashboard URL loads in a
-   browser (a login prompt = success). If neither works you are on the wrong tailnet — the
-   single most common setup failure.
-2. `pip install "skypilot[kubernetes]"` (or `uv pip install "skypilot[kubernetes]"`).
-3. `export SKYPILOT_API_SERVER_ENDPOINT="https://<user>:<password>@<head>.ts.net"`
-4. Verify: `sky api info` shows the server and your user; `sky gpus list` shows H100s.
-   `sky status` should show **no clusters** — if it lists one, you are holding GPUs.
+1. Install Tailscale and join with the key the organizers give you:
+   ```bash
+   curl -fsSL https://tailscale.com/install.sh | sudo sh
+   sudo tailscale up --authkey='<the tag:hackathon key>'
+   ```
+   Verify: `tailscale status` lists `sky-head`, and `https://sky-head.taila766fb.ts.net/dashboard`
+   loads in a browser (a login prompt = success). If neither works you are on the wrong tailnet —
+   the single most common setup failure.
+2. Install the client and point it at the server:
+   ```bash
+   pip install "skypilot[kubernetes]"
+   export SKYPILOT_API_SERVER_ENDPOINT='https://team-N:<password>@sky-head.taila766fb.ts.net'
+   ```
+3. Verify: `sky api info` shows you as `team-N`. Your workspace (`hackathon`) is selected
+   automatically — you never pass `--workspace`.
 
-## Two hard rules
+Everyone on your team runs the same three steps with the same credential. You all see and
+share the same box.
 
-The GPUs are shared across every team. Both rules are about not taking capacity from the room.
+## 2. Bring up your team box (once)
 
-**1. Submit jobs. Do not create clusters.** Use `sky jobs launch`, not `sky launch -c <name>`.
-A named cluster holds its GPUs from the moment it starts until someone runs `sky down` —
-while you read logs, think, or sleep. A managed job (`sky jobs launch`) gives them back when
-it finishes.
+```bash
+# From the training/ directory (run.yaml ships the env with the box):
+sky launch -c team-N-box training/run.yaml
+```
 
-**2. Single node only.** One node per task. Do not set `num_nodes`. Multi-node jobs are
-admitted all-or-nothing and block the queue waiting for a whole second node.
+This is a **persistent cluster** (`-c <name>`). It holds its GPUs and keeps its disk from the
+moment it starts until you run `sky down`. That is exactly what you want here: it is your box
+for the event.
 
-## Your quota
+- **Default size is 4 GPUs** (what the training config uses). You *may* use more if the fleet is
+  free — you share a **20-GPU pool** across all teams — but be considerate and leave room for
+  others. There is no hard per-box cap; the pool is the limit, and a request that doesn't fit
+  right now **queues** and starts when GPUs free (it does not fail).
+- **One box per team.** Don't spin up extra clusters. `sky status` should show just your box.
 
-- **4 GPUs, hard cap.** A job asking for more than `H100-80GB:4` is rejected by the namespace
-  quota and sits **Pending forever** — it is not a queue wait, it will never start. Ask for
-  what you need, up to 4.
-- **Low priority, preemptible.** Your jobs run on spare capacity and are preempted when the
-  hosts' owners reclaim it. For anything longer than a smoke, wire checkpoint/resume (see
-  "Long runs"). You never preempt anyone else.
+## 3. Work on the box
 
-## The task shape (this matters — copy it)
+```bash
+sky exec team-N-box training/run.yaml    # run another job on the box (reuses it, no re-provision)
+ssh team-N-box                           # interactive shell on the box
+sky logs team-N-box                      # console output of the last job
+sky queue team-N-box                     # jobs you've run on it
+```
 
-Every guest task needs the same three things in `config.kubernetes.pod_config`, and jobs fail
-without them. This is the minimal working shape:
+`sky exec` and `ssh` both land on the **same box** as your launch — same GPUs, same files.
+
+## 4. Persist data on the box (this is the point of a persistent box)
+
+Anything you write to the box's disk **stays there across jobs, `sky exec`, and SSH sessions**,
+for as long as the box is up. Use the `/persist` volume the template mounts (or just your home
+dir). Tested end-to-end: one job writes `/persist/…`, a later `sky exec` job reads and updates
+it, and an SSH session sees the change.
+
+```bash
+# job A writes:            echo hi > /persist/checkpoint
+# later `sky exec` job B:  cat /persist/checkpoint   # -> hi   (it's still there)
+```
+
+**Getting results off the box** (do this before you tear it down — the disk does NOT survive
+`sky down`):
+```bash
+rsync -avP team-N-box:/persist/ ./results/     # SkyPilot tunnels it; no extra setup
+```
+For anything you must keep long-term, push it out to **your own** storage over the internet
+(the box can reach the public net): Hugging Face Hub for model weights (`HF_TOKEN`), Weights &
+Biases for metrics (`WANDB_API_KEY`) — set them in the task's `envs:`.
+
+## 5. When you're done
+
+```bash
+sky down team-N-box     # frees your GPUs for other teams. Pull results off FIRST.
+```
+
+## The task shape (copy this — jobs fail without it)
 
 ```yaml
 name: myjob
 resources:
   infra: kubernetes
-  accelerators: H100-80GB:1          # <= 4
-  # The prepared hackathon image (PUBLIC, anonymous pull — no credential). Digest-pinned;
-  # your organizers give you the current digest. It already contains prime-rl.
-  image_id: docker:<registry>/ml-hackathon/prime-rl-base@sha256:<digest>
+  accelerators: H100-80GB:4          # your box size (4 is the default; more only if free)
+  # The prepared hackathon image (PUBLIC, anonymous pull — no credential). It already
+  # contains prime-rl. Digest-pinned; if organizers announce a rotated digest, use that.
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
 config:
   kubernetes:
     pod_config:
@@ -68,76 +109,38 @@ config:
                                        # bootstraps ssh/ray as root. Omit this and your job dies
                                        # in setup with "sudo: no new privileges is set".
             volumeMounts:
-              - {name: scratch, mountPath: /scratch}   # your writable workspace (caches, ckpts)
+              - {name: persist, mountPath: /persist}    # your durable-while-up workspace
         volumes:
-          - {name: scratch, emptyDir: {sizeLimit: 200Gi}}   # emptyDir, NOT hostPath
+          - {name: persist, emptyDir: {sizeLimit: 200Gi}}   # emptyDir, NOT hostPath
 run: |
-  python my_script.py
+  echo "work here; write anything you want to keep to /persist"
 ```
 
-```bash
-sky jobs launch -y -n myjob task.yaml
-sky jobs queue                     # your jobs and their state
-sky jobs logs myjob                # or --no-follow for a snapshot
-sky jobs cancel myjob
-```
+## What's blocked, and why your box is still safe
 
-## Non-negotiables (each of these is a job that fails without it)
+Your box is a hardened container. From it (jobs **and** SSH alike) you **cannot**:
+- mount our disks — `hostPath` / `/mnt/nvme` is forbidden (verified: they don't exist in the box);
+- create a PersistentVolumeClaim;
+- reach our internal network, other namespaces, or cloud metadata — **only the public internet**
+  (PyPI / Hugging Face / W&B / GitHub) is reachable;
+- run a different image (customize the approved one with `pip install` inside the box);
+- touch the Kubernetes API (the box runs as a powerless, no-RBAC service account).
 
-- **`runAsUser: 0`** in the container `securityContext` — see above. The #1 thing people forget.
-- **The public `ml-hackathon` image, pinned by digest.** You cannot pull our other images and
-  you do not need a pull secret. Never `:latest` (an `IfNotPresent` launch can run a stale
-  cached image for hours).
-- **No `hostPath`.** The namespace forbids it (it is how you would reach the host's disks), so
-  `/mnt/nvme` and host paths are unavailable. Use an `emptyDir` volume for scratch/caches, and
-  point `HF_HOME`, `VLLM_CACHE_ROOT`, and your `output_dir` at it.
-- **No `privileged`, no host namespaces, no extra images.** All rejected at admission; do not
-  copy pod-security tricks from generic SkyPilot examples, they will not schedule here.
-- **`sky jobs launch`, not `sky launch -c`. No `num_nodes`.** See the two hard rules.
-
-## Checking on things, non-interactively
-
-```bash
-sky api info                    # connectivity + your identity
-sky gpus list                   # capacity
-sky jobs queue                  # your jobs (you see only your own)
-sky jobs logs <name> --no-follow
-sky status                      # clusters YOU are holding — should be empty
-```
-
-If your job is **Pending**: either you asked for >4 GPUs (it will never start — lower it), or
-you are at your quota and it starts when capacity frees. Do not retry-loop on Pending.
+None of that limits normal work — install what you need, train, persist, pull results out.
 
 ## Failures and what they mean
 
 | Symptom | Cause and fix |
 |---|---|
-| Dashboard or endpoint unreachable | You are on a personal tailnet. Switch to the event one. |
+| Dashboard/endpoint unreachable | You're on a personal tailnet. Switch to the event one. |
 | Job dies in setup: `sudo: the "no new privileges" flag is set` | Missing `runAsUser: 0` in the container securityContext. |
-| Pod rejected: `violates PodSecurity "baseline"... hostPath volumes` | You used a `hostPath` volume (e.g. `/mnt/nvme`). Use an `emptyDir` instead. |
-| Pod rejected: `... may only run the approved hackathon image` | Wrong image. Use the digest-pinned `ml-hackathon/prime-rl-base` the organizers gave you. |
-| Job stuck **Pending**, never schedules | You asked for more than 4 GPUs. The quota caps you at 4; lower `accelerators`. |
-| `ErrImagePull` | You referenced a private image or added a pull secret. The hackathon image is public; drop `imagePullSecrets` and use the `ml-hackathon` digest. |
-| Files missing inside the pod | You assumed a shared node path. Ship files with `file_mounts`; scratch is your `emptyDir`, not `/mnt/nvme`. |
-| Managed job FAILED but a pod still runs | `sky jobs cancel` the job (deleting the pod directly gets it resurrected by the controller). |
-
-## Long runs
-
-Your jobs are preemptible, so anything long needs recovery configured or it won't survive:
-
-```yaml
-resources:
-  job_recovery:
-    max_restarts_on_errors: 3
-```
-
-plus `--ckpt.resume-step -1` in the run command. An evicted pod looks like a program failure
-to the controller; a restart without resume refuses the checkpointed output dir and burns a
-restart. Point `output_dir` at your `/scratch` emptyDir (it is per-pod and does not survive
-teardown — copy anything you want to keep out with `sky` before the job ends, or push to your
-own storage).
+| Pod rejected: `... hostPath volumes` | You used a `hostPath` (e.g. `/mnt/nvme`). Use the `/persist` `emptyDir`. |
+| Pod rejected: `... may only run the approved image` | Wrong image. Use the digest-pinned `ml-hackathon/prime-rl-base`. |
+| `sky launch` sits **Pending** | The 20-GPU pool is full right now; it starts when a box frees. Lower your GPU ask, or wait. |
+| Files gone after `sky down` | The box disk doesn't survive teardown. Pull with `rsync` / push to HF/W&B **before** `sky down`. |
+| `ErrImagePull` | You referenced a private image or added a pull secret. The hackathon image is public; drop `imagePullSecrets`. |
 
 ## RL training on this environment
 
-See [`../../training/README.md`](../../training/README.md) — the `run.yaml` there is already in
-this shape (public image, `runAsUser: 0`, emptyDir scratch, 4 GPUs).
+See [`../../training/README.md`](../../training/README.md) — `training/run.yaml` is already in this
+shape (approved image, `runAsUser: 0`, `/persist` volume) and brings the box up with training running.

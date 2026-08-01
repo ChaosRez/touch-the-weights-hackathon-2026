@@ -108,8 +108,11 @@ cost the most time:
 - **Job dies in setup with `sudo: the "no new privileges" flag is set`** — you are missing
   `runAsUser: 0` in the container `securityContext`. The image runs as a non-root user;
   SkyPilot bootstraps ssh/ray as root and needs this.
-- **Pod rejected `... hostPath volumes` or job stuck Pending** — you used a `hostPath` (e.g.
-  `/mnt/nvme`, which the namespace forbids — use an `emptyDir`), or you asked for more than
-  the 4-GPU cap (a >4-GPU request is quota-rejected and sits Pending forever).
+- **Pod rejected `... hostPath volumes`** — you used a `hostPath` (e.g. `/mnt/nvme`, which the
+  namespace forbids). Use the `/persist` `emptyDir` instead; it's durable for the box's life.
+- **`sky launch` sits Pending** — the shared 20-GPU pool is full right now. Your box starts
+  when GPUs free; lower your GPU ask or wait. (It won't fail — it queues.)
+- **Files gone after `sky down`** — the box disk doesn't survive teardown. `rsync
+  team-N-box:/persist ./` or push to your HF/W&B **before** tearing down.
 - **`ErrImagePull` or `... may only run the approved image`** — use the public, digest-pinned
   `ml-hackathon/prime-rl-base` image the organizers gave you, with no `imagePullSecrets`.

@@ -172,21 +172,29 @@ reports/               the measured outer-loop result
 
 ## If you use the GPU cluster
 
-You run in an isolated `hackathon` workspace: you see only your own jobs, you have a hard
-**4-GPU cap**, and your jobs are low-priority (preemptible on spare capacity). Three rules,
-because every team shares one pool:
+Your team gets **one persistent GPU box** in a shared `hackathon` workspace. You bring it up
+once and work on it all event; anything you write to it stays there until you tear it down.
 
-- **Submit jobs, do not create clusters.** `sky jobs launch`, never `sky launch -c <name>`.
-  A named cluster holds its GPUs until someone runs `sky down`; a managed job gives them back
-  when it finishes. Check with `sky status`, which should show nothing.
-- **Single node, <= 4 GPUs.** Do not set `num_nodes`. A request over 4 GPUs is quota-rejected
-  and sits Pending forever.
-- **Use the required pod shape.** Every guest task needs the public `ml-hackathon` image
-  (digest-pinned, no pull secret), `runAsUser: 0`, and an `emptyDir` scratch volume (no
-  `hostPath` / `/mnt/nvme`). Miss any and the job fails at admission or in setup.
+```bash
+sky launch -c team-N-box training/run.yaml    # bring up your box (4 GPUs default) + start training
+sky exec   team-N-box training/run.yaml       # run again on the SAME box (no re-provision)
+ssh        team-N-box                          # interactive shell on it
+rsync -avP team-N-box:/persist ./results       # pull results OFF before teardown
+sky down   team-N-box                          # free the GPUs when done
+```
 
-The training config here is single node and fits the 4-GPU cap. The exact shape, the failure
-table, and a copy-paste task template are in [`skills/cluster/SKILL.md`](skills/cluster/SKILL.md).
+Three things to know, because all teams share a **20-GPU pool**:
+
+- **One box per team.** Don't create extra clusters. `sky status` should show just your box.
+  4 GPUs is the default; use more only if the pool is free, and be considerate.
+- **Persist to `/persist`.** It survives across jobs, `sky exec`, and SSH for the box's life —
+  but **not** `sky down`. Copy results off (or push to your HF/W&B) before tearing down.
+- **Required pod shape.** The public `ml-hackathon` image (digest-pinned, no pull secret),
+  `runAsUser: 0`, and an `emptyDir` `/persist` volume (no `hostPath` / `/mnt/nvme`). Miss any
+  and it fails at admission or in setup.
+
+Everyone on a team shares one login (`team-N`). The full flow, the failure table, a copy-paste
+task template, and what's walled off are in [`skills/cluster/SKILL.md`](skills/cluster/SKILL.md).
 
 ## Pointers
 
