@@ -11,3 +11,6 @@ dist/
 *.json.results
 live_traces/
 runs/
+
+# Local cluster credentials. Never commit this file.
+skills/cluster/setup-team-4-cluster.sh

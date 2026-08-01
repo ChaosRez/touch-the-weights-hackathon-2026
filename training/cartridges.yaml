@@ -1,0 +1,174 @@
+# Phase 0 preflight for the Cartridges experiment.
+#
+# This task starts with the same hydration and score/finalize gates as the
+# existing environment preflight, then runs the remaining Phase 0 checks.
+# Run it from hackathon/training so the relative paths resolve correctly.
+# Reuse the team's existing box whenever it exists:
+#
+#   sky status
+#   sky exec team-N-box cartridges.yaml
+#
+# Only when `sky status` confirms that the team box does not exist:
+#
+#   sky launch -c team-N-box cartridges.yaml
+
+name: cartridges-phase-0
+
+# `sky exec` skips setup and file_mounts but does sync workdir. Sync the common
+# parent so both repositories are refreshed when reusing a box. The root
+# .skyignore keeps local virtualenvs and Git metadata out of the upload.
+workdir: ../..
+
+resources:
+  infra: kubernetes
+  accelerators: H100-80GB:4
+  image_id: docker:europe-west3-docker.pkg.dev/operator-agent-487820/ml-hackathon/prime-rl-base@sha256:a69f048650ac36d62da91effa337602c4541826558f7095eba9c47c433f7753b
+
+config:
+  kubernetes:
+    pod_config:
+      spec:
+        containers:
+          - securityContext:
+              runAsUser: 0
+            volumeMounts:
+              - {name: persist, mountPath: /persist}
+              - {name: shm, mountPath: /dev/shm}
+        volumes:
+          - {name: persist, emptyDir: {sizeLimit: 200Gi}}
+          - {name: shm, emptyDir: {medium: Memory, sizeLimit: 64Gi}}
+
+file_mounts:
+  /tmp/cartridges/hackathon: ..
+  /tmp/cartridges/still: ../../still
+
+envs:
+  HF_HOME: /persist/hf
+  HF_HUB_CACHE: /persist/hf/hub
+  VLLM_CACHE_ROOT: /persist/vllm
+  TOKENIZERS_PARALLELISM: "false"
+
+setup: |
+  # Keep setup intentionally trivial: SkyPilot skips it for `sky exec`. All
+  # required, idempotent setup lives at the start of run instead.
+  test -x /app/.venv/bin/python
+
+run: |
+  set -euo pipefail
+  CARTRIDGES_WORKDIR="$PWD"
+  test -d "$CARTRIDGES_WORKDIR/hackathon"
+  test -d "$CARTRIDGES_WORKDIR/still"
+
+  cd /app
+  CARTRIDGES_PYTHON=/app/.venv/bin/python
+
+  echo "=== dependency-free editable installs ==="
+  VERIFIERS_BEFORE="$($CARTRIDGES_PYTHON -c 'import verifiers; print(verifiers.__version__)')"
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/hackathon"
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/hackathon/environments/alien-api"
+  VIRTUAL_ENV=/app/.venv uv pip install --no-deps -e "$CARTRIDGES_WORKDIR/still"
+  VERIFIERS_AFTER="$($CARTRIDGES_PYTHON -c 'import verifiers; print(verifiers.__version__)')"
+  test "$VERIFIERS_AFTER" = "$VERIFIERS_BEFORE"
+
+  mkdir -p \
+    /persist/hf \
+    /persist/cartridges/data \
+    /persist/cartridges/checkpoints \
+    /persist/cartridges/runs
+
+  echo "=== shared Python environment ==="
+  $CARTRIDGES_PYTHON - <<'PY'
+  import sys
+
+  import alien_api_env
+  import still
+  import verifiers
+
+  assert sys.version_info[:2] == (3, 12), sys.version
+  print("python:", sys.version.split()[0])
+  print("alien_api_env:", alien_api_env.__file__)
+  print("still:", still.__file__)
+  print("verifiers:", verifiers.__version__)
+  PY
+
+  echo "=== hydration and score/finalize smoke ==="
+  $CARTRIDGES_PYTHON - <<'PY'
+  import asyncio
+
+  from alien_api_env.certify.traces import build_trace
+  from alien_api_env.vf import AlienApiTaskset, AlienApiTasksetConfig
+  from verifiers.v1.loaders import taskset_class, taskset_config_type
+
+  assert taskset_class("alien-api") is AlienApiTaskset
+  assert "split" in taskset_config_type("alien-api").model_fields
+
+  tasks = list(AlienApiTaskset(AlienApiTasksetConfig(split="")).load())
+  assert len(tasks) == 240, f"expected 240 episodes, got {len(tasks)}"
+  print("fleet hydrated:", len(tasks), "episodes")
+
+  async def main():
+      task = tasks[0]
+      trace = build_trace(task, task.data.accepted, tool_returns=[])
+      await task.score(trace)
+      await task.finalize(trace, None)
+      assert trace.reward == 1.0, trace.reward
+      assert trace.info.get("feedback"), "finalize did not attach feedback"
+      print("score/finalize smoke: OK")
+
+  asyncio.run(main())
+  PY
+
+  echo "=== Still test suite ==="
+  cd "$CARTRIDGES_WORKDIR/still"
+  $CARTRIDGES_PYTHON -m pytest -q
+
+  echo "=== Qwen3-8B one-H100 load smoke ==="
+  cd /app
+  CUDA_VISIBLE_DEVICES=0 $CARTRIDGES_PYTHON - <<'PY'
+  import torch
+  from transformers import AutoModelForCausalLM, AutoTokenizer
+
+  model_id = "Qwen/Qwen3-8B"
+  assert torch.cuda.is_available(), "CUDA is unavailable"
+  assert torch.cuda.device_count() == 1, torch.cuda.device_count()
+
+  tokenizer = AutoTokenizer.from_pretrained(model_id)
+  model = AutoModelForCausalLM.from_pretrained(
+      model_id,
+      torch_dtype=torch.bfloat16,
+      device_map={"": 0},
+      low_cpu_mem_usage=True,
+  )
+  inputs = tokenizer("Reply with OK.", return_tensors="pt").to("cuda:0")
+  with torch.inference_mode():
+      output = model.generate(**inputs, max_new_tokens=1, do_sample=False)
+  assert output.shape[-1] == inputs.input_ids.shape[-1] + 1
+  print("model:", model_id)
+  print("visible GPUs:", torch.cuda.device_count())
+  print("device:", torch.cuda.get_device_name(0))
+  print("Qwen load/generate smoke: OK")
+  PY
+
+  $CARTRIDGES_PYTHON - <<'PY'
+  import json
+  import platform
+  from datetime import UTC, datetime
+  from pathlib import Path
+
+  import verifiers
+
+  result = {
+      "completed_at": datetime.now(UTC).isoformat(),
+      "python": platform.python_version(),
+      "verifiers": verifiers.__version__,
+      "episodes": 240,
+      "score_finalize": "passed",
+      "still_tests": "passed",
+      "qwen_model": "Qwen/Qwen3-8B",
+      "qwen_visible_gpus": 1,
+  }
+  destination = Path("/persist/cartridges/runs/phase_0.json")
+  destination.write_text(json.dumps(result, indent=2) + "\n")
+  print("wrote", destination)
+  print("PHASE 0 OK")
+  PY

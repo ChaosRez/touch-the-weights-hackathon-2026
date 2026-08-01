@@ -1,5 +1,26 @@
 # RL training on alien-api
 
+## Cartridges Phase 0
+
+`cartridges.yaml` is the reproducibility gate for the Cartridges experiment. It starts with
+the existing environment preflight checks, syncs and installs both this repository and Still
+into the image's Python 3.12 environment without dependencies, hydrates all 240 episodes,
+exercises `score()` and `finalize()`, runs Still's tests, and loads `Qwen/Qwen3-8B` with one
+H100 visible. Artifacts and model caches live under `/persist/cartridges` and `/persist/hf`
+respectively.
+
+Run these commands from `hackathon/training`. Check for the team's existing box before doing
+anything else; never launch a second cluster:
+
+```bash
+sky status
+sky exec team-N-box cartridges.yaml
+```
+
+Use `sky launch -c team-N-box cartridges.yaml` only when `sky status` confirms that the box
+does not already exist. A successful run writes
+`/persist/cartridges/runs/phase_0.json` and ends with `PHASE 0 OK`.
+
 Two files: `rl.toml` (what to train) and `run.yaml` (how to get it onto the cluster).
 Cluster access itself is in [`../skills/cluster/SKILL.md`](../skills/cluster/SKILL.md).
 
