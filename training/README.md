@@ -5,8 +5,13 @@ Cluster access itself is in [`../skills/cluster/SKILL.md`](../skills/cluster/SKI
 
 ## Read this before you launch
 
-**Verified on the training image (2026-07-31)**, launched as a hackathon guest via
-`sky jobs launch`, 4x H100 (2 trainer + 2 inference), Qwen3-8B + LoRA:
+Training runs on **your team's persistent box** (`sky launch -c team-N-box`, then iterate with
+`sky exec` / `ssh` — see [`../skills/cluster/SKILL.md`](../skills/cluster/SKILL.md)). Checkpoints
+land on `/persist`, which survives across re-runs on the box (so `--ckpt.resume-step -1` picks up
+where you left off); copy them off before you `sky down`.
+
+**Verified on the training image**, on a hackathon team box, 4x H100 (2 trainer + 2 inference),
+Qwen3-8B + LoRA:
 
 - the pod is admitted and provisions; `setup` installs the env and the preflight passes
   (240 episodes hydrate offline)
@@ -120,32 +125,31 @@ no env configured — set env = { taskset = { id = "<id>" } } (v1) or id = "<id>
    Should print `AlienApiTaskset`. If it raises, the hub wrapper in
    `environments/alien-api/` is not installed: `uv pip install --no-deps -e environments/alien-api`.
 
-2. **A preflight job, before any training.** Not a dev box: `preflight.yaml` is one GPU for
-   under a minute, in the same guest task shape as `run.yaml`. It prints the image's
-   `verifiers` build, installs the env, resolves the id, hydrates all 240 episodes, and
-   runs a full score/finalize.
+2. **Bring up your box with a preflight, before a long run.** `preflight.yaml` installs the
+   env, prints the image's `verifiers` build, resolves the id, hydrates all 240 episodes, and
+   runs a full score/finalize — a minute on your box.
 
    ```bash
-   sky jobs launch -y -n alien-preflight preflight.yaml
-   sky jobs logs alien-preflight
+   sky launch -c team-N-box preflight.yaml     # brings the box up + runs the preflight
+   sky logs team-N-box                          # its output
    ```
 
-   Verified 2026-07-31: the image ships **`verifiers 0.2.2.dev17`**, not the
-   `0.2.2.dev36` this repo pins for laptop use, and the env runs on it unchanged. That is
-   why both installs use `--no-deps` — letting uv apply our pin would swap the image's
-   verifiers out from under prime-rl mid-setup.
+   Verified: the image ships **`verifiers 0.2.2.dev17`**, not the `0.2.2.dev36` this repo
+   pins for laptop use, and the env runs on it unchanged. That is why both installs use
+   `--no-deps` — letting uv apply our pin would swap the image's verifiers out from under
+   prime-rl mid-setup.
 
-3. **A two-step smoke**, before committing to a long run. Override the step count on the
-   command line rather than editing `rl.toml`:
+3. **A two-step smoke on the same box**, before committing to a long run. Override the step
+   count on the command line rather than editing `rl.toml`:
 
    ```bash
    # in run.yaml's run block, append --max-steps 2 to the `rl` invocation
-   sky jobs launch -y -n alien-smoke run.yaml
+   sky exec team-N-box run.yaml                  # reuses the box; no re-provision
    ```
 
    Success looks like `SUCCESS Step 1 ... SUCCESS Step 2 ... Orchestrator finished.` with
    **zero** `HarnessError` lines. Budget ~6 minutes, most of it model download and vLLM
-   startup.
+   startup (and the download is cached on `/persist` for next time).
 
    Caveat worth knowing: the run that verified this path end to end (2026-08-01) also
    lowered every concurrency knob to the floor (`batch_size 4`, `group_size 2`,
@@ -153,7 +157,8 @@ no env configured — set env = { taskset = { id = "<id>" } } (v1) or id = "<id>
    **not** been re-verified since the mcp fix landed. If a full-scale run misbehaves, drop
    those four values first — that configuration is known good.
 
-4. **Then the real run**, `run.yaml` + `rl.toml`.
+4. **Then the real run** on the box: `sky exec team-N-box run.yaml` (or `sky launch -c team-N-box run.yaml`
+   if the box isn't up yet).
 
 ## Debugging a run that fails or stalls
 
@@ -163,10 +168,13 @@ this to your `run:` block after the `rl` invocation:
 ```bash
 timeout 900 .venv/bin/rl @ /tmp/cfg/rl.toml || true   # bound it: a failing run retries forever
 
-find /scratch -name 'metrics.jsonl' -exec tail -5 {} \;        # every scalar, incl. error types
-find /scratch -name 'traces.jsonl' | head                       # per-step rollout traces
-find /scratch -path '*logs/envs*' -name '*.log' -exec tail -100 {} \;   # env server + MCP errors
+find /persist -name 'metrics.jsonl' -exec tail -5 {} \;        # every scalar, incl. error types
+find /persist -name 'traces.jsonl' | head                       # per-step rollout traces
+find /persist -path '*logs/envs*' -name '*.log' -exec tail -100 {} \;   # env server + MCP errors
 ```
+
+Better yet, because this is a persistent box: `ssh team-N-box` and poke at `/persist`
+directly while the run is live — the box is yours, so an interactive shell is the fast path.
 
 - **`metrics.jsonl`** only exists if you enable the sink: add a bare `[file_monitor]` table
   to `rl.toml`. Without it these scalars are computed and thrown away, because W&B is
@@ -179,9 +187,11 @@ find /scratch -path '*logs/envs*' -name '*.log' -exec tail -100 {} \;   # env se
   stays `RUNNING`, duration climbs, the log just stops. Poll the last log *timestamp*, not
   the status.
 
-Do not reach for an interactive box for any of this. `sky launch -c` holds its GPUs until
-someone tears it down, and with every team on one pool that is capacity taken out of the
-room for as long as you leave it up. Iterate by resubmitting jobs.
+The interactive box IS the model here: `sky launch -c team-N-box` once, then `sky exec` /
+`ssh` to iterate on it — no re-provisioning, and `/persist` keeps your caches and checkpoints
+between runs. Just remember the box holds GPUs from the shared 20-GPU pool the whole time it
+is up, so `sky down team-N-box` when your team is done for the day (after pulling anything you
+want to keep off it).
 
 ## Sizing
 

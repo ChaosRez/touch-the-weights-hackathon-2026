@@ -1,19 +1,23 @@
-# alien-api RL on the cluster — hackathon guest config, single node, <=4x H100.
+# alien-api RL on your team's persistent box — single node, 4x H100 by default.
 #
-# Launch from THIS directory (file_mounts sources are relative to it):
+# Bring the box up WITH training running (run from THIS directory; file_mounts are relative):
 #
-#   sky jobs launch -y -n alien-rl run.yaml
+#   sky launch -c team-N-box run.yaml
 #
-# `sky jobs launch`, NOT `sky launch -c`. A named cluster holds its GPUs until someone runs
-# `sky down`; a managed job releases them when it finishes. Every team shares one pool.
+# This is your team's PERSISTENT box: `-c <name>` keeps its GPUs and its disk until you
+# `sky down` it. Iterate on the SAME box afterwards without re-provisioning:
 #
-# SINGLE NODE. Do not add `num_nodes`.
+#   sky exec team-N-box run.yaml      # run again (resumes from the checkpoint on /persist)
+#   ssh   team-N-box                  # poke around, inspect /persist, install extras
+#
+# SINGLE NODE. Do not add `num_nodes`. See ../skills/cluster/SKILL.md for the full flow.
 name: alien-api-rl
 
 resources:
   infra: kubernetes
-  # 4 GPUs is the hackathon per-team cap. The rl.toml splits them 2 trainer + 2 inference.
-  # Asking for more is rejected by the namespace quota (your job stays Pending forever).
+  # 4 GPUs is the default box size; the rl.toml splits them 2 trainer + 2 inference. You MAY
+  # ask for more if the shared 20-GPU pool is free — be considerate of other teams. A request
+  # that doesn't fit right now queues and starts when GPUs free (it does not fail).
   accelerators: H100-80GB:4
   # The prepared hackathon image (public, anon-pull, no credential needed). It IS prime-rl.
   # Pinned by digest — never :latest. Ask an organizer if the digest has been rotated.
@@ -30,24 +34,28 @@ config:
           - securityContext:
               runAsUser: 0
             volumeMounts:
-              - {name: scratch, mountPath: /scratch}   # writable workspace for caches + ckpts
+              - {name: persist, mountPath: /persist}   # DURABLE-while-up: ckpts + caches live here
               - {name: shm, mountPath: /dev/shm}        # NCCL/vLLM want large shared memory
         volumes:
           # emptyDir, NOT hostPath. The hackathon namespace forbids hostPath (it is how you
-          # would reach the host's disks), so `/mnt/nvme` is unavailable to you — use this.
-          - {name: scratch, emptyDir: {sizeLimit: 200Gi}}
+          # would reach the host's disks), so `/mnt/nvme` is unavailable — use this. /persist
+          # survives across jobs / `sky exec` / SSH on this box, until you `sky down`. Copy
+          # anything you must keep OFF the box before teardown (rsync team-N-box:/persist ./).
+          - {name: persist, emptyDir: {sizeLimit: 200Gi}}
           - {name: shm, emptyDir: {medium: Memory, sizeLimit: 64Gi}}
 
 file_mounts:
-  # The env travels with the job. Sources are relative to this dir.
+  # The env travels with the box on first launch. Sources are relative to this dir.
   /tmp/alien-api-env: ..
   /tmp/cfg/rl.toml: ./rl.toml
 
 envs:
-  # All caches on the writable scratch volume (NOT /mnt/nvme, which you cannot mount).
-  HF_HOME: /scratch/hf
-  VLLM_CACHE_ROOT: /scratch/vllm
-  # W&B is offline by default (no key needed). Set an org-provided WANDB_API_KEY to go online.
+  # Caches + checkpoints on the persistent volume (NOT /mnt/nvme, which you cannot mount).
+  HF_HOME: /persist/hf
+  VLLM_CACHE_ROOT: /persist/vllm
+  # W&B is offline by default (no key needed). To stream curves out, set your own WANDB_API_KEY
+  # here and WANDB_MODE=online. To push model weights out, set your own HF_TOKEN and add a
+  # `huggingface-cli upload` step — the box can reach the public internet.
   WANDB_MODE: offline
 
 setup: |

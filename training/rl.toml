@@ -5,7 +5,9 @@
 # 0.2.2.dev36: the id resolves to AlienApiTaskset, every .taskset knob is a real field).
 # Do the smoke in README.md (2 steps) before any long run.
 
-output_dir = "/scratch/alien-api/run"     # writable emptyDir from run.yaml, NOT /mnt/nvme
+output_dir = "/persist/alien-api/run"     # persistent-while-up volume from run.yaml (NOT /mnt/nvme).
+                                          # Survives `sky exec` re-runs so --ckpt.resume-step -1 works;
+                                          # copy off the box before `sky down` (rsync team-N-box:/persist).
 max_steps = 200
 seq_len = 32768
 
