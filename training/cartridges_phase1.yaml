@@ -15,6 +15,10 @@ envs:
   HF_HOME: /persist/hf
   HF_HUB_CACHE: /persist/hf/hub
   PHASE1_N: "20"
+  PHASE1_MODEL: Qwen/Qwen3-8B
+  PHASE1_OUTPUT: /persist/cartridges/runs/phase_1.json
+  PHASE1_REQUIRE_GATES: "1"
+  PHASE1_TEXT_LEDGER_TOKENS: "0"
   TOKENIZERS_PARALLELISM: "false"
 
 run: |
@@ -36,10 +40,21 @@ run: |
   export CUDA_VISIBLE_DEVICES="$CARTRIDGES_GPU_ID"
   export CARTRIDGES_DEVICE=cuda:0
 
+  PHASE1_GATE_ARGS=()
+  if [ "$PHASE1_REQUIRE_GATES" = "1" ]; then
+    PHASE1_GATE_ARGS+=(--require-gates)
+  fi
+  PHASE1_MEMORY_ARGS=()
+  if [ "$PHASE1_TEXT_LEDGER_TOKENS" -gt 0 ]; then
+    PHASE1_MEMORY_ARGS+=(--text-ledger-tokens "$PHASE1_TEXT_LEDGER_TOKENS")
+  fi
+
   $CARTRIDGES_PYTHON "$CARTRIDGES_WORKDIR/hackathon/examples/cartridge_loop.py" \
     --n "$PHASE1_N" \
+    --model "$PHASE1_MODEL" \
     --split "" \
     --seed 17 \
     --max-new-tokens 2048 \
-    --require-gates \
-    --out /persist/cartridges/runs/phase_1.json
+    --out "$PHASE1_OUTPUT" \
+    "${PHASE1_MEMORY_ARGS[@]}" \
+    "${PHASE1_GATE_ARGS[@]}"

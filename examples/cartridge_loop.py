@@ -22,6 +22,7 @@ from cartridge_memory.qwen_agent import (
     QwenGenerationConfig,
     QwenToolAgent,
 )
+from cartridge_memory.text_ledger import GlobalTextLedger
 
 
 def _answered(record: dict) -> bool:
@@ -92,6 +93,12 @@ async def main() -> int:
     parser.add_argument("--artifact-verbosity", type=int, default=22000)
     parser.add_argument("--no-thinking", action="store_true")
     parser.add_argument("--greedy", action="store_true")
+    parser.add_argument(
+        "--text-ledger-tokens",
+        type=int,
+        default=0,
+        help="enable the minimal global text ledger with this tokenizer-position budget",
+    )
     parser.add_argument("--require-gates", action="store_true")
     parser.add_argument("--out", default="/persist/cartridges/runs/phase_1.json")
     args = parser.parse_args()
@@ -115,15 +122,24 @@ async def main() -> int:
         )
     )
     agent = QwenToolAgent(backend, QwenAgentConfig(max_tool_turns=args.max_tool_turns))
+    ledger = (
+        GlobalTextLedger(backend.tokenizer, args.text_ledger_tokens)
+        if args.text_ledger_tokens > 0
+        else None
+    )
 
     records: list[dict] = []
     for index, task in enumerate(tasks):
         started = time.monotonic()
         try:
-            rollout = await agent.run(task, attachment=None, seed=args.seed + index)
+            attachment = ledger.attachment() if ledger is not None else None
+            rollout = await agent.run(task, attachment=attachment, seed=args.seed + index)
             record = rollout.to_dict()
             record["index"] = index
             record["seconds"] = round(time.monotonic() - started, 2)
+            record["memory_tokens"] = ledger.rendered_tokens if ledger is not None else 0
+            if ledger is not None:
+                ledger.update(record)
             print(
                 f"[{index:02d}] answered={record['answered']} "
                 f"typed={record['submitted']} "
@@ -145,12 +161,20 @@ async def main() -> int:
         records.append(record)
 
     summary = _summary(records, args.n)
+    if ledger is not None:
+        summary.update(
+            memory_mode="global_text_ledger",
+            memory_budget_tokens=ledger.max_tokens,
+            final_ledger_entries=len(ledger.entries),
+            final_rendered_tokens=ledger.rendered_tokens,
+        )
     payload = {
         "model": args.model,
         "split": args.split,
         "seed": args.seed,
         "artifact_verbosity": args.artifact_verbosity,
         "thinking": not args.no_thinking,
+        "text_ledger_tokens": args.text_ledger_tokens,
         "summary": summary,
         "records": records,
     }

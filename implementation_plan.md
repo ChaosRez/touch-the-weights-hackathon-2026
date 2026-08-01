@@ -153,6 +153,40 @@ Output:
 This is a useful control but is secondary to the recurrent-retention plot. Do not add embeddings,
 RAG, LLM-written world summaries, or a generalized memory package today.
 
+Status: **completed on `team-4-box` (2026-08-01, jobs 51 and 52).** Both Qwen3-4B
+arms ran the same 20 ordered episodes with seed 17 and the Phase 1 generation settings. Both
+completed without execution or parse errors. The bounded-text arm used the existing
+`TextAttachment` path; before each new episode it rendered the most recent 64 tokenizer
+positions from one global, deduplicated ledger of verbatim rejection feedback and mechanical
+tool outcomes. Its rendered history was 0 tokens for episode 0, 61 for episode 1, and exactly
+64 for episodes 2--19.
+
+| Metric | Cold 8B (job 32) | Cold 4B (job 51) | Text64 4B (job 52) |
+|---|---:|---:|---:|
+| Completed episodes | 20/20 | 20/20 | 20/20 |
+| Execution/parse errors | 0 | 0 | 0 |
+| First-10 answer rate | 1.00 | 1.00 | 1.00 |
+| Mean `value_correct` | 0.55 | 0.50 | 0.50 |
+| Mean `preference_accepted` | 0.20 | 0.20 | 0.00 |
+| Typed `submit_answer` episodes | 15/20 | 11/20 | 1/20 |
+| Mean tool calls | 2.05 | 0.75 | 0.85 |
+
+The minimal ledger is therefore a valid equal-budget control, but it did not improve value
+accuracy in this 20-episode run and substantially reduced typed submissions and preference
+acceptance. Treat this as a negative result, not evidence that fixed text memory helped. The
+final ledger contained 21 deduplicated entries and rendered to the full 64-token budget.
+
+Artifacts:
+
+```text
+/persist/cartridges/runs/phase_1_qwen3_4b_cold.json
+/persist/cartridges/runs/qwen3_4b_text64.json
+```
+
+Local verification after adding the ledger: **121 passed**, repository-wide Ruff clean,
+generated YAML shell syntax valid, and `git diff --check` clean. The persistent cluster was
+reused and left running.
+
 ## Workstream B — synthetic repeated-compaction dataset
 
 Owner: teammate 2.
