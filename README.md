@@ -3,10 +3,11 @@
 > Can a language model carry an ever-growing stream of experience inside a fixed neural-memory
 > budget—without RAG, an expanding prompt, or changing the base model's weights?
 
-Cartridges is a research prototype built by a three-person team at the **Touch Weights — Construct
-Labs × Alexandria Hackathon**. We trained a cross-attention Perceiver to recurrently compress
-Qwen3's per-layer key/value cache into **64 fixed KV positions**, then connected that state to a
-real tool-using continual-learning agent.
+Cartridges is a research prototype built by a three-person team at the
+[**Touch Weights — Construct Labs × Alexandria Continual Learning Hack**](https://luma.com/0fgouohr).
+We trained a cross-attention Perceiver to recurrently compress Qwen3's per-layer key/value cache
+into **64 fixed KV positions**, then connected that state to a real tool-using continual-learning
+agent.
 
 This is not another retrieval wrapper. It modifies the model's inference path: prior rollout
 memory becomes learned K/V tensors, injected through a custom Hugging Face attention
@@ -68,8 +69,10 @@ recurrent states sampled at mixed depths `{1, 2, 4, 8}`.
 
 ## What we built
 
-- **A Hugging Face-native Still implementation.** A frozen Qwen3 base model, trainable per-layer
-  Perceiver, compact K/V plus attention bias, and a registered custom attention implementation.
+- **A Hugging Face-native
+  [Still implementation](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026).** A
+  frozen Qwen3 base model, trainable per-layer Perceiver, compact K/V plus attention bias, and a
+  registered custom attention implementation.
 - **Differentiable recurrent compaction.** `recompact_train` captures new raw K/V under
   `no_grad`, detaches prior state for bounded-memory training, and backpropagates only through the
   Perceiver's final recurrent update.
@@ -166,6 +169,9 @@ checkpoint is approximately **492 MB**, while the base model remains frozen.
 
 ## Repository map
 
+The project is published as two companion repositories. Clone them as sibling directories named
+`hackathon` and `still`, which is the layout used by the reproducible training jobs.
+
 ```text
 hackathon/
 ├── src/cartridge_memory/       Qwen agent, legal memory, text/KV ledgers, resume state
@@ -174,9 +180,10 @@ hackathon/
 ├── reports/                    immutable metrics, plots, and transfer-failure analysis
 ├── tests/                      agent, cache, leakage, resume, and reporting tests
 ├── HACKATHON_README.md         organizer's original Alien API brief
+├── NOTICE.md                   provenance, ownership boundaries, and upstream links
 └── implementation_plan.md      decisions, measured results, gates, and limitations
 
-still/
+still/                          ChaosRez/still-touch-the-weights-hackathon2026
 ├── src/still/model/            Perceiver, CompactCache, custom attention, model wrapper
 ├── src/still/data/             QuALITY preprocessing and recurrent synthetic data
 ├── src/still/train_recurrent.py
@@ -185,9 +192,14 @@ still/
 
 ## Run the local test suites
 
-From the repository root:
+Create the expected two-repository workspace, then run both CPU suites:
 
 ```bash
+mkdir cartridges-workspace
+cd cartridges-workspace
+git clone https://github.com/ChaosRez/touch-the-weights-hackathon-2026.git hackathon
+git clone https://github.com/ChaosRez/still-touch-the-weights-hackathon2026.git still
+
 cd hackathon
 uv sync --extra dev --extra examples
 uv run pytest -q
@@ -199,7 +211,7 @@ uv run pytest -q
 
 The 4B training and evaluation jobs require an NVIDIA GPU. Reproducible cluster task files are in
 [`training/`](training/); the minimal standalone Still workflow is documented in
-[`../still/README.md`](../still/README.md).
+[the companion Still repository](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026).
 
 ## What we would build next
 
@@ -214,9 +226,21 @@ The 4B training and evaluation jobs require an NVIDIA GPU. Reproducible cluster 
 
 ## Context and attribution
 
+- [Project notices and component provenance](NOTICE.md)
+- [Touch Weights — Continual Learning Hack](https://luma.com/0fgouohr)
+- [Construct Labs' public hackathon environment](https://github.com/constructlabs/hackathon)
 - [Original Alien API hackathon brief](HACKATHON_README.md)
 - [STILL: Neural KV Cache Compaction](https://arxiv.org/abs/2606.07878)
-- [Our Hugging Face-native Still implementation](../still/README.md)
+- [Our recurrent Still fork](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026)
+- [Still starting point by Max Meuer](https://github.com/MaxMeuer/still)
 
 Built as a hackathon research prototype. Results are reported with their actual evaluation size,
 controls, failure gates, and known limitations.
+
+> [!NOTE]
+> **Hackathon provenance.** This project extends Construct Labs'
+> [public hackathon environment](https://github.com/constructlabs/hackathon) and uses a companion
+> [Still research fork](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026) derived
+> from [MaxMeuer/still](https://github.com/MaxMeuer/still). Upstream components retain their own
+> authorship and license terms; this repository does not relicense them. See
+> [NOTICE.md](NOTICE.md) for the component-level attribution and scope of our work.
