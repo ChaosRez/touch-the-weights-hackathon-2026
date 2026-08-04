@@ -3,11 +3,7 @@
 > Can a language model carry an ever-growing stream of experience inside a fixed neural-memory
 > budget—without RAG, an expanding prompt, or changing the base model's weights?
 
-Cartridges is a research prototype built by a three-person team at the
-[**Touch Weights — Construct Labs × Alexandria Continual Learning Hack**](https://luma.com/0fgouohr).
-We trained a cross-attention Perceiver to recurrently compress Qwen3's per-layer key/value cache
-into **64 fixed KV positions**, then connected that state to a real tool-using continual-learning
-agent.
+Cartridges is a three-person hackathon team at the [**Touch Weights — Construct Labs × Alexandria Continual Learning Hack**](https://luma.com/0fgouohr). We built an extension built on two provided foundations: Construct Labs’ Alien API environment and scratchpad baseline, and Max Meuer’s Hugging Face-native STILL implementation. The upstream STILL repository already provided the Perceiver compactor, custom KV attention path, forward-KL training loop, and recursive inference-time compaction. Our team added recurrence-aware training and evaluation, then integrated the resulting fixed-budget neural state with a local Qwen3-4B agent operating in the Alien API environment.
 
 This is not another retrieval wrapper. It modifies the model's inference path: prior rollout
 memory becomes learned K/V tensors, injected through a custom Hugging Face attention
@@ -17,22 +13,31 @@ implementation while the current task and tool conversation remain live.
 knowledge distillation · Perceiver · custom attention · tool calling · agent evaluation · Qwen3 ·
 PyTorch · Hugging Face Transformers · CUDA · H100 · SkyPilot · Kubernetes · MLOps
 
+> [!NOTE]
+> **Hackathon provenance.** This project extends Construct Labs'
+> [public hackathon environment](https://github.com/constructlabs/hackathon) and uses a companion
+> [Still research fork](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026) derived
+> from [MaxMeuer/still](https://github.com/MaxMeuer/still). Upstream components retain their own
+> authorship and license terms; this repository does not relicense them. See
+> [NOTICE.md](NOTICE.md) for the component-level attribution and scope of our work.
+
 ## Results at a glance
 
 | Result | Measured outcome |
 |---|---|
 | Fixed neural-memory budget | **64 KV positions at every layer and recurrence depth** |
-| Effective controlled compression | **6,400 source tokens represented by 64 positions — 100×** |
+| Effective controlled compression | **100 × 64-token chunks processed through a recurrent state fixed at 64 KV positions** |
 | Held-out controlled retention | **56/56 correct** across depths 1, 2, 4, 8, 16, 32, and 100 |
 | Depth-100 fidelity | Forward KL **0.02093**, versus **0.33279** for single-step training |
 | Local Qwen agent | Real CRM/wiki/answer tools, verifier scoring, feedback, and full trace capture |
-| Validation | **137 Hackathon tests + 30 Still tests**, Ruff and immutable-result checks |
+| Validation | **137 tests passing in the extended hackathon repository and 30 in the extended Still repository, including inherited upstream tests**, Ruff and immutable-result checks |
 | Real-agent transfer | Failed the declared smoke gate; diagnosed and stopped before an invalid 240-run claim |
 
 The controlled result is strong: recurrence-aware training preserves early facts after 100 cache
 updates while a same-budget text window forgets them. The real-agent result is equally important:
 the learned cache did not preserve Qwen's tool-call protocol, exposing a concrete gap between
 **remembering a fact** and **conditioning reliable agent behavior**.
+
 
 ## System architecture
 
@@ -69,10 +74,8 @@ recurrent states sampled at mixed depths `{1, 2, 4, 8}`.
 
 ## What we built
 
-- **A Hugging Face-native
-  [Still implementation](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026).** A
-  frozen Qwen3 base model, trainable per-layer Perceiver, compact K/V plus attention bias, and a
-  registered custom attention implementation.
+- **A recurrence-training extension of Max Meuer’s Hugging Face-native [Still implementation](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026).**
+  We added differentiable recurrent training, controlled multi-step data, mixed-depth sampling, and fixed-budget evaluation through 100 compaction cycles.
 - **Differentiable recurrent compaction.** `recompact_train` captures new raw K/V under
   `no_grad`, detaches prior state for bounded-memory training, and backpropagates only through the
   Perceiver's final recurrent update.
@@ -80,8 +83,8 @@ recurrent states sampled at mixed depths `{1, 2, 4, 8}`.
   answers, controlled fact age, held-out seeds, and recurrence depths up to 100.
 - **A four-arm evaluator.** Full context, a 64-token text window, recursively applied single-step
   Still, and recurrence-aware Still under an equal 64-position budget.
-- **A local Qwen tool agent.** Native Qwen tool-call parsing, in-process CRM/wiki/answer dispatch,
-  multi-turn execution, deterministic verifier scoring, reviewer feedback, and complete traces.
+- **A local Qwen adapter for Construct Labs’ Alien API environment.**
+  We connected Qwen’s native tool-call parsing and recurrent KV state to the organizer-provided CRM/wiki tools, verifier, reviewer feedback, and deterministic scoring.
 - **A leakage-safe memory boundary.** The persistent state accepts only verbatim reviewer
   corrections and the agent's own tool observations—never accepted labels, reward fields, hidden
   episode metadata, or submitted answers.
@@ -89,7 +92,7 @@ recurrent states sampled at mixed depths `{1, 2, 4, 8}`.
   versioned results, hash-audited memory events, paired bootstrap reports, failure replay, and
   H100 jobs on a persistent SkyPilot cluster.
 
-## Controlled retention: the compactor works
+## Controlled synthetic retention: recurrence-aware training works
 
 We froze `Qwen/Qwen3-4B` and trained only the Perceiver in bfloat16. Stage one used 50
 single-step updates; stage two used 75 recurrence-aware updates. The final evaluation used eight
@@ -231,16 +234,8 @@ The 4B training and evaluation jobs require an NVIDIA GPU. Reproducible cluster 
 - [Construct Labs' public hackathon environment](https://github.com/constructlabs/hackathon)
 - [Original Alien API hackathon brief](HACKATHON_README.md)
 - [STILL: Neural KV Cache Compaction](https://arxiv.org/abs/2606.07878)
-- [Our recurrent Still fork](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026)
+- [Our recurrence-training extension of MaxMeuer/still](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026)
 - [Still starting point by Max Meuer](https://github.com/MaxMeuer/still)
 
 Built as a hackathon research prototype. Results are reported with their actual evaluation size,
 controls, failure gates, and known limitations.
-
-> [!NOTE]
-> **Hackathon provenance.** This project extends Construct Labs'
-> [public hackathon environment](https://github.com/constructlabs/hackathon) and uses a companion
-> [Still research fork](https://github.com/ChaosRez/still-touch-the-weights-hackathon2026) derived
-> from [MaxMeuer/still](https://github.com/MaxMeuer/still). Upstream components retain their own
-> authorship and license terms; this repository does not relicense them. See
-> [NOTICE.md](NOTICE.md) for the component-level attribution and scope of our work.
